@@ -3,8 +3,10 @@
 
 use std::{fmt, iter::Peekable, str::CharIndices};
 
-use miette::{Diagnostic, Error, SourceSpan};
+use miette::{Diagnostic, Error};
 use thiserror::Error;
+
+use crate::SourceSpan;
 
 #[derive(Diagnostic, Debug, Error)]
 #[error("Unexpected token '{token}'")]
@@ -15,7 +17,7 @@ pub struct SingleTokenError {
     pub token: char,
 
     #[label = "this input character"]
-    err_span: SourceSpan,
+    err_span: miette::SourceSpan,
 }
 
 #[derive(Diagnostic, Debug, Error)]
@@ -27,7 +29,7 @@ pub struct TokenSeparatorError {
     pub separator: char,
 
     #[label = "this input separator"]
-    err_span: SourceSpan,
+    err_span: miette::SourceSpan,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -263,24 +265,17 @@ pub enum TokenKind {
 /// ```
 #[derive(Clone, Copy, PartialEq)]
 pub struct Token<'de> {
-    src: &'de str,
-    offset: usize,
-    len: usize,
+    src_span: SourceSpan<'de>,
     kind: TokenKind,
 }
 
 impl<'de> Token<'de> {
-    fn new(src: &'de str, offset: usize, len: usize, kind: TokenKind) -> Token<'de> {
-        Token {
-            src,
-            offset,
-            len,
-            kind,
-        }
+    fn new(src_span: SourceSpan<'de>, kind: TokenKind) -> Token<'de> {
+        Token { src_span, kind }
     }
 
-    fn new_ident(src: &'de str, offset: usize, len: usize) -> Token<'de> {
-        let kind = match &src[offset..offset + len] {
+    fn new_ident(src_span: SourceSpan<'de>) -> Token<'de> {
+        let kind = match src_span.src() {
             "alignas" => TokenKind::KeywordAlignas,
             "alignof" => TokenKind::KeywordAlignof,
             "and" => TokenKind::And,
@@ -380,12 +375,7 @@ impl<'de> Token<'de> {
             _ => TokenKind::Ident,
         };
 
-        Token {
-            src,
-            offset,
-            len,
-            kind,
-        }
+        Token { src_span, kind }
     }
 
     /// Getter of the kind of the token
@@ -395,7 +385,12 @@ impl<'de> Token<'de> {
 
     /// Getter of the token src value
     pub fn src(&self) -> &'de str {
-        &self.src[self.offset..self.offset + self.len]
+        self.src_span.src()
+    }
+
+    /// Getter of the token src span value
+    pub fn src_span(&self) -> SourceSpan<'de> {
+        self.src_span
     }
 }
 
@@ -438,6 +433,26 @@ pub struct Lexer<'de> {
     rest: Peekable<CharIndices<'de>>,
 }
 
+macro_rules! new_token {
+    // New token with its kind
+    ($self:ident, $offset:expr, $len:expr, $kind:expr) => {
+        Some(Ok(Token::new(
+            SourceSpan::new($self.src, $offset, $len),
+            $kind,
+        )))
+    };
+    // New ident
+    ($self:ident, $offset:expr, $len:expr) => {
+        Some(Ok(Token::new_ident(SourceSpan::new(
+            $self.src, $offset, $len,
+        ))))
+    };
+    // New token from a source span
+    ($src_span:expr, $kind:expr) => {
+        Some(Ok(Token::new($src_span, $kind)))
+    };
+}
+
 impl<'de> Lexer<'de> {
     /// Initialize a Lexer from a C++ source code
     ///
@@ -455,10 +470,6 @@ impl<'de> Lexer<'de> {
             rest: input.char_indices().peekable(),
         }
     }
-
-    fn new_token(&self, offset: usize, len: usize, kind: TokenKind) -> Result<Token<'de>, Error> {
-        Ok(Token::new(self.src, offset, len, kind))
-    }
 }
 
 impl<'de> Iterator for Lexer<'de> {
@@ -472,7 +483,7 @@ impl<'de> Iterator for Lexer<'de> {
                         if matches!(c, 'a'..='z' | 'A'..='Z' | '0'..='9' | '_') {
                             self.rest.next();
                         } else {
-                            return Some(Ok(Token::new_ident(self.src, c_at, offset - c_at)));
+                            return new_token!(self, c_at, offset - c_at);
                         }
                     }
                 }
@@ -481,82 +492,73 @@ impl<'de> Iterator for Lexer<'de> {
                         if matches!(c, '0'..='9' | '.') {
                             self.rest.next();
                         } else {
-                            return Some(Ok(Token::new(
-                                self.src,
-                                c_at,
-                                offset - c_at,
-                                TokenKind::Number,
-                            )));
+                            return new_token!(self, c_at, offset - c_at, TokenKind::Number);
                         }
                     }
                 }
-                '{' => return Some(self.new_token(c_at, 1, TokenKind::LeftBrace)),
-                '}' => return Some(self.new_token(c_at, 1, TokenKind::RightBrace)),
+                '{' => return new_token!(self, c_at, 1, TokenKind::LeftBrace),
+                '}' => return new_token!(self, c_at, 1, TokenKind::RightBrace),
                 '[' => {
                     if let Some((_, '[')) = self.rest.peek() {
                         self.rest.next();
-                        return Some(self.new_token(c_at, 2, TokenKind::DoubleLeftBracket));
+                        return new_token!(self, c_at, 2, TokenKind::DoubleLeftBracket);
                     } else {
-                        return Some(self.new_token(c_at, 1, TokenKind::LeftBracket));
+                        return new_token!(self, c_at, 1, TokenKind::LeftBracket);
                     }
                 }
                 ']' => {
                     if let Some((_, ']')) = self.rest.peek() {
                         self.rest.next();
-                        return Some(self.new_token(c_at, 2, TokenKind::DoubleRightBracket));
+                        return new_token!(self, c_at, 2, TokenKind::DoubleRightBracket);
                     } else {
-                        return Some(self.new_token(c_at, 1, TokenKind::RightBracket));
+                        return new_token!(self, c_at, 1, TokenKind::RightBracket);
                     }
                 }
                 '#' => {
                     if let Some((_, '#')) = self.rest.peek() {
                         self.rest.next();
-                        return Some(self.new_token(c_at, 2, TokenKind::DoubleNumberSign));
+                        return new_token!(self, c_at, 2, TokenKind::DoubleNumberSign);
                     } else {
-                        return Some(self.new_token(c_at, 1, TokenKind::NumberSign));
+                        return new_token!(self, c_at, 1, TokenKind::NumberSign);
                     }
                 }
                 '(' => {
-                    return Some(self.new_token(c_at, 1, TokenKind::LeftParenthese));
+                    return new_token!(self, c_at, 1, TokenKind::LeftParenthese);
                 }
                 ')' => {
-                    return Some(self.new_token(c_at, 1, TokenKind::RightParenthese));
+                    return new_token!(self, c_at, 1, TokenKind::RightParenthese);
                 }
                 '<' => {
                     if let Some((_, c)) = self.rest.peek() {
                         match c {
                             ':' => {
                                 self.rest.next();
-                                return Some(self.new_token(c_at, 2, TokenKind::LeftBracket));
+                                return new_token!(self, c_at, 2, TokenKind::LeftBracket);
                             }
                             '%' => {
                                 self.rest.next();
-                                return Some(self.new_token(c_at, 2, TokenKind::LeftBrace));
+                                return new_token!(self, c_at, 2, TokenKind::LeftBrace);
                             }
                             '=' => {
                                 self.rest.next();
                                 if let Some((_, '>')) = self.rest.peek() {
                                     self.rest.next();
-                                    return Some(self.new_token(c_at, 3, TokenKind::Compare));
+                                    return new_token!(self, c_at, 3, TokenKind::Compare);
                                 } else {
-                                    return Some(self.new_token(c_at, 2, TokenKind::LessOrEqualTo));
+                                    return new_token!(self, c_at, 2, TokenKind::LessOrEqualTo);
                                 }
                             }
                             '<' => {
                                 self.rest.next();
                                 if let Some((_, '=')) = self.rest.peek() {
                                     self.rest.next();
-                                    return Some(self.new_token(
-                                        c_at,
-                                        3,
-                                        TokenKind::CompoundShiftLeft,
-                                    ));
+                                    return new_token!(self, c_at, 3, TokenKind::CompoundShiftLeft);
                                 } else {
-                                    return Some(self.new_token(c_at, 2, TokenKind::ShiftLeft));
+                                    return new_token!(self, c_at, 2, TokenKind::ShiftLeft);
                                 }
                             }
                             _ => {
-                                return Some(self.new_token(c_at, 1, TokenKind::LeftChevron));
+                                return new_token!(self, c_at, 1, TokenKind::LeftChevron);
                             }
                         }
                     }
@@ -566,23 +568,24 @@ impl<'de> Iterator for Lexer<'de> {
                         match c {
                             '=' => {
                                 self.rest.next();
-                                return Some(self.new_token(c_at, 2, TokenKind::GreaterOrEqualTo));
+                                return new_token!(self, c_at, 2, TokenKind::GreaterOrEqualTo);
                             }
                             '>' => {
                                 self.rest.next();
                                 if let Some((_, '=')) = self.rest.peek() {
                                     self.rest.next();
-                                    return Some(self.new_token(
+                                    return new_token!(
+                                        self,
                                         c_at,
                                         3,
-                                        TokenKind::CompoundShiftRight,
-                                    ));
+                                        TokenKind::CompoundShiftRight
+                                    );
                                 } else {
-                                    return Some(self.new_token(c_at, 2, TokenKind::ShiftRight));
+                                    return new_token!(self, c_at, 2, TokenKind::ShiftRight);
                                 }
                             }
                             _ => {
-                                return Some(self.new_token(c_at, 1, TokenKind::RightChevron));
+                                return new_token!(self, c_at, 1, TokenKind::RightChevron);
                             }
                         }
                     }
@@ -592,7 +595,7 @@ impl<'de> Iterator for Lexer<'de> {
                         match c {
                             '=' => {
                                 self.rest.next();
-                                return Some(self.new_token(c_at, 2, TokenKind::CompoundModulo));
+                                return new_token!(self, c_at, 2, TokenKind::CompoundModulo);
                             }
                             ':' => {
                                 self.rest.next();
@@ -600,22 +603,23 @@ impl<'de> Iterator for Lexer<'de> {
                                     self.rest.next();
                                     if let Some((_, ':')) = self.rest.peek() {
                                         self.rest.next();
-                                        return Some(self.new_token(
+                                        return new_token!(
+                                            self,
                                             c_at,
                                             4,
-                                            TokenKind::DoubleNumberSign,
-                                        ));
+                                            TokenKind::DoubleNumberSign
+                                        );
                                     }
                                 }
 
-                                return Some(self.new_token(c_at, 2, TokenKind::NumberSign));
+                                return new_token!(self, c_at, 2, TokenKind::NumberSign);
                             }
                             '>' => {
                                 self.rest.next();
-                                return Some(self.new_token(c_at, 2, TokenKind::RightBrace));
+                                return new_token!(self, c_at, 2, TokenKind::RightBrace);
                             }
                             _ => {
-                                return Some(self.new_token(c_at, 1, TokenKind::Modulo));
+                                return new_token!(self, c_at, 1, TokenKind::Modulo);
                             }
                         }
                     }
@@ -625,34 +629,34 @@ impl<'de> Iterator for Lexer<'de> {
                         match c {
                             ':' => {
                                 self.rest.next();
-                                return Some(self.new_token(c_at, 2, TokenKind::DoubleColon));
+                                return new_token!(self, c_at, 2, TokenKind::DoubleColon);
                             }
                             '>' => {
                                 self.rest.next();
-                                return Some(self.new_token(c_at, 2, TokenKind::RightBracket));
+                                return new_token!(self, c_at, 2, TokenKind::RightBracket);
                             }
                             _ => {
-                                return Some(self.new_token(c_at, 1, TokenKind::Colon));
+                                return new_token!(self, c_at, 1, TokenKind::Colon);
                             }
                         }
                     }
                 }
-                ';' => return Some(self.new_token(c_at, 1, TokenKind::Semicolon)),
+                ';' => return new_token!(self, c_at, 1, TokenKind::Semicolon),
                 '.' => {
                     if let Some((_, '*')) = self.rest.peek() {
                         self.rest.next();
-                        return Some(self.new_token(c_at, 2, TokenKind::PointerObjMember));
+                        return new_token!(self, c_at, 2, TokenKind::PointerObjMember);
                     } else {
-                        return Some(self.new_token(c_at, 1, TokenKind::Dot));
+                        return new_token!(self, c_at, 1, TokenKind::Dot);
                     }
                 }
-                '?' => return Some(self.new_token(c_at, 1, TokenKind::Ternary)),
+                '?' => return new_token!(self, c_at, 1, TokenKind::Ternary),
                 '*' => {
                     if let Some((_, '=')) = self.rest.peek() {
                         self.rest.next();
-                        return Some(self.new_token(c_at, 2, TokenKind::CompoundMult));
+                        return new_token!(self, c_at, 2, TokenKind::CompoundMult);
                     } else {
-                        return Some(self.new_token(c_at, 1, TokenKind::Star));
+                        return new_token!(self, c_at, 1, TokenKind::Star);
                     }
                 }
                 '+' => {
@@ -660,14 +664,14 @@ impl<'de> Iterator for Lexer<'de> {
                         match c {
                             '=' => {
                                 self.rest.next();
-                                return Some(self.new_token(c_at, 2, TokenKind::CompoundAdd));
+                                return new_token!(self, c_at, 2, TokenKind::CompoundAdd);
                             }
                             '+' => {
                                 self.rest.next();
-                                return Some(self.new_token(c_at, 2, TokenKind::Increment));
+                                return new_token!(self, c_at, 2, TokenKind::Increment);
                             }
                             _ => {
-                                return Some(self.new_token(c_at, 1, TokenKind::Plus));
+                                return new_token!(self, c_at, 1, TokenKind::Plus);
                             }
                         }
                     }
@@ -679,25 +683,21 @@ impl<'de> Iterator for Lexer<'de> {
                                 self.rest.next();
                                 if let Some((_, '*')) = self.rest.peek() {
                                     self.rest.next();
-                                    return Some(self.new_token(
-                                        c_at,
-                                        3,
-                                        TokenKind::PointerObjAccess,
-                                    ));
+                                    return new_token!(self, c_at, 3, TokenKind::PointerObjAccess);
                                 } else {
-                                    return Some(self.new_token(c_at, 2, TokenKind::PointerMember));
+                                    return new_token!(self, c_at, 2, TokenKind::PointerMember);
                                 }
                             }
                             '=' => {
                                 self.rest.next();
-                                return Some(self.new_token(c_at, 2, TokenKind::CompoundSub));
+                                return new_token!(self, c_at, 2, TokenKind::CompoundSub);
                             }
                             '-' => {
                                 self.rest.next();
-                                return Some(self.new_token(c_at, 2, TokenKind::Decrement));
+                                return new_token!(self, c_at, 2, TokenKind::Decrement);
                             }
                             _ => {
-                                return Some(self.new_token(c_at, 1, TokenKind::Minus));
+                                return new_token!(self, c_at, 1, TokenKind::Minus);
                             }
                         }
                     }
@@ -711,11 +711,12 @@ impl<'de> Iterator for Lexer<'de> {
                                     if c == '*'
                                         && let Some((offset, '/')) = self.rest.next()
                                     {
-                                        return Some(self.new_token(
+                                        return new_token!(
+                                            self,
                                             c_at,
                                             offset + 1 - c_at,
-                                            TokenKind::Comment,
-                                        ));
+                                            TokenKind::Comment
+                                        );
                                     }
                                 }
                             }
@@ -723,20 +724,21 @@ impl<'de> Iterator for Lexer<'de> {
                                 self.rest.next();
                                 while let Some((offset, c)) = self.rest.next() {
                                     if c == '\n' {
-                                        return Some(self.new_token(
+                                        return new_token!(
+                                            self,
                                             c_at,
                                             offset - c_at,
-                                            TokenKind::Comment,
-                                        ));
+                                            TokenKind::Comment
+                                        );
                                     }
                                 }
                             }
                             '=' => {
                                 self.rest.next();
-                                return Some(self.new_token(c_at, 2, TokenKind::CompoundDiv));
+                                return new_token!(self, c_at, 2, TokenKind::CompoundDiv);
                             }
                             _ => {
-                                return Some(self.new_token(c_at, 1, TokenKind::Div));
+                                return new_token!(self, c_at, 1, TokenKind::Div);
                             }
                         }
                     }
@@ -744,9 +746,9 @@ impl<'de> Iterator for Lexer<'de> {
                 '^' => {
                     if let Some((_, '=')) = self.rest.peek() {
                         self.rest.next();
-                        return Some(self.new_token(c_at, 2, TokenKind::XorEq));
+                        return new_token!(self, c_at, 2, TokenKind::XorEq);
                     } else {
-                        return Some(self.new_token(c_at, 1, TokenKind::Xor));
+                        return new_token!(self, c_at, 1, TokenKind::Xor);
                     }
                 }
                 '&' => {
@@ -754,14 +756,14 @@ impl<'de> Iterator for Lexer<'de> {
                         match c {
                             '&' => {
                                 self.rest.next();
-                                return Some(self.new_token(c_at, 2, TokenKind::And));
+                                return new_token!(self, c_at, 2, TokenKind::And);
                             }
                             '=' => {
                                 self.rest.next();
-                                return Some(self.new_token(c_at, 2, TokenKind::AndEq));
+                                return new_token!(self, c_at, 2, TokenKind::AndEq);
                             }
                             _ => {
-                                return Some(self.new_token(c_at, 1, TokenKind::BitAnd));
+                                return new_token!(self, c_at, 1, TokenKind::BitAnd);
                             }
                         }
                     }
@@ -771,36 +773,36 @@ impl<'de> Iterator for Lexer<'de> {
                         match c {
                             '|' => {
                                 self.rest.next();
-                                return Some(self.new_token(c_at, 2, TokenKind::Or));
+                                return new_token!(self, c_at, 2, TokenKind::Or);
                             }
                             '=' => {
                                 self.rest.next();
-                                return Some(self.new_token(c_at, 2, TokenKind::OrEq));
+                                return new_token!(self, c_at, 2, TokenKind::OrEq);
                             }
                             _ => {
-                                return Some(self.new_token(c_at, 1, TokenKind::BitOr));
+                                return new_token!(self, c_at, 1, TokenKind::BitOr);
                             }
                         }
                     }
                 }
-                '~' => return Some(self.new_token(c_at, 1, TokenKind::Compl)),
+                '~' => return new_token!(self, c_at, 1, TokenKind::Compl),
                 '!' => {
                     if let Some((_, '=')) = self.rest.peek() {
                         self.rest.next();
-                        return Some(self.new_token(c_at, 2, TokenKind::NotEqualTo));
+                        return new_token!(self, c_at, 2, TokenKind::NotEqualTo);
                     } else {
-                        return Some(self.new_token(c_at, 1, TokenKind::Not));
+                        return new_token!(self, c_at, 1, TokenKind::Not);
                     }
                 }
                 '=' => {
                     if let Some((_, '=')) = self.rest.peek() {
                         self.rest.next();
-                        return Some(self.new_token(c_at, 2, TokenKind::EqualTo));
+                        return new_token!(self, c_at, 2, TokenKind::EqualTo);
                     } else {
-                        return Some(self.new_token(c_at, 1, TokenKind::Equal));
+                        return new_token!(self, c_at, 1, TokenKind::Equal);
                     }
                 }
-                ',' => return Some(self.new_token(c_at, 1, TokenKind::Comma)),
+                ',' => return new_token!(self, c_at, 1, TokenKind::Comma),
                 '\\' => {
                     self.rest.next();
                     continue;
@@ -810,11 +812,7 @@ impl<'de> Iterator for Lexer<'de> {
                         if c == '\\' {
                             self.rest.next();
                         } else if c == '"' {
-                            return Some(self.new_token(
-                                c_at,
-                                offset + 1 - c_at,
-                                TokenKind::String,
-                            ));
+                            return new_token!(self, c_at, offset + 1 - c_at, TokenKind::String);
                         }
                     }
                 }
@@ -822,25 +820,29 @@ impl<'de> Iterator for Lexer<'de> {
                     if let Some((_, c)) = self.rest.next() {
                         if c == '\\' {
                             self.rest.next();
+                            let src_span = SourceSpan::new(self.src, c_at, 4);
                             if let Some((_, '\'')) = self.rest.next() {
-                                return Some(self.new_token(c_at, 4, TokenKind::Char));
+                                return new_token!(src_span, TokenKind::Char);
                             } else {
                                 return Some(Err(TokenSeparatorError {
                                     src: self.src.to_string(),
                                     separator: '\'',
-                                    err_span: SourceSpan::from(c_at..c_at + 4),
+                                    err_span: src_span.into(),
                                 }
                                 .into()));
                             }
-                        } else if let Some((_, '\'')) = self.rest.next() {
-                            return Some(Ok(Token::new(self.src, c_at, 3, TokenKind::Char)));
                         } else {
-                            return Some(Err(TokenSeparatorError {
-                                src: self.src.to_string(),
-                                separator: '\'',
-                                err_span: SourceSpan::from(c_at..c_at + 3),
+                            let src_span = SourceSpan::new(self.src, c_at, 4);
+                            if let Some((_, '\'')) = self.rest.next() {
+                                return new_token!(src_span, TokenKind::Char);
+                            } else {
+                                return Some(Err(TokenSeparatorError {
+                                    src: self.src.to_string(),
+                                    separator: '\'',
+                                    err_span: src_span.into(),
+                                }
+                                .into()));
                             }
-                            .into()));
                         }
                     }
                 }
@@ -849,7 +851,7 @@ impl<'de> Iterator for Lexer<'de> {
                     return Some(Err(SingleTokenError {
                         src: self.src.to_string(),
                         token: c,
-                        err_span: SourceSpan::from(c_at..c_at + 1),
+                        err_span: miette::SourceSpan::from(c_at..c_at + 1),
                     }
                     .into()));
                 }
@@ -927,10 +929,15 @@ mod tests {
         "#;
         let mut main_lex = Lexer::new(main);
         assert_eq!(Some(TokenKind::NumberSign), next_kind!(main_lex));
-        assert_eq!(
-            Some("Token { src: \"include\", kind: Ident }".to_string()),
-            next_dbg!(main_lex)
-        );
+        if let Some(Ok(include_token)) = main_lex.next() {
+            let src_span = include_token.src_span();
+            assert_eq!(SourceSpan::new(main, 14, 7), src_span);
+            assert_eq!("include", src_span.src());
+            assert_eq!(TokenKind::Ident, include_token.kind());
+        } else {
+            panic!("Can't parse the first include token");
+        }
+
         assert_eq!(Some(TokenKind::LeftChevron), next_kind!(main_lex));
         assert_eq!(
             Some("Token { src: \"iostream\", kind: Ident }".to_string()),
