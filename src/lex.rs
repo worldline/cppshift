@@ -46,6 +46,8 @@ pub enum TokenKind {
     Comment,
     /// Dot `.`
     Dot,
+    /// Ellipsis `...`
+    Ellipsis,
     /// Semicolon `;`
     Semicolon,
     /// Comma `,`
@@ -479,22 +481,85 @@ impl<'de> Iterator for Lexer<'de> {
         while let Some((c_at, c)) = self.rest.next() {
             match c {
                 'a'..='z' | 'A'..='Z' | '_' => {
+                    let mut end_offset = c_at + c.len_utf8();
                     while let Some((offset, c)) = self.rest.peek() {
                         if matches!(c, 'a'..='z' | 'A'..='Z' | '0'..='9' | '_') {
+                            end_offset = offset + c.len_utf8();
                             self.rest.next();
                         } else {
-                            return new_token!(self, c_at, offset - c_at);
+                            break;
                         }
                     }
+                    return new_token!(self, c_at, end_offset - c_at);
                 }
                 '0'..='9' => {
-                    while let Some((offset, c)) = self.rest.peek() {
-                        if matches!(c, '0'..='9' | '.') {
-                            self.rest.next();
-                        } else {
-                            return new_token!(self, c_at, offset - c_at, TokenKind::Number);
+                    let mut end_offset = c_at + 1;
+                    // Check for hex (0x), binary (0b), or octal prefix
+                    if c == '0' {
+                        if let Some((_, next_c)) = self.rest.peek() {
+                            match next_c {
+                                'x' | 'X' => {
+                                    self.rest.next();
+                                    end_offset += 1;
+                                    // Parse hex digits
+                                    while let Some((offset, c)) = self.rest.peek() {
+                                        if matches!(c, '0'..='9' | 'a'..='f' | 'A'..='F' | '\'') {
+                                            end_offset = offset + c.len_utf8();
+                                            self.rest.next();
+                                        } else {
+                                            break;
+                                        }
+                                    }
+                                }
+                                'b' | 'B' => {
+                                    self.rest.next();
+                                    end_offset += 1;
+                                    // Parse binary digits
+                                    while let Some((offset, c)) = self.rest.peek() {
+                                        if matches!(c, '0' | '1' | '\'') {
+                                            end_offset = offset + c.len_utf8();
+                                            self.rest.next();
+                                        } else {
+                                            break;
+                                        }
+                                    }
+                                }
+                                _ => {
+                                    // Decimal or octal - parse all valid chars
+                                    while let Some((offset, c)) = self.rest.peek() {
+                                        if matches!(c, '0'..='9' | '.' | 'e' | 'E' | '+' | '-' | '\'' | 'a'..='z' | 'A'..='Z') {
+                                            end_offset = offset + c.len_utf8();
+                                            self.rest.next();
+                                        } else {
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        // Regular decimal number with possible exponent and suffix
+                        while let Some((offset, c)) = self.rest.peek() {
+                            if matches!(c, '0'..='9' | '.' | 'e' | 'E' | '+' | '-' | '\'' | 'a'..='z' | 'A'..='Z') {
+                                end_offset = offset + c.len_utf8();
+                                self.rest.next();
+                            } else {
+                                break;
+                            }
                         }
                     }
+
+                    // Parse any remaining suffix (u, l, ll, ul, etc.)
+                    while let Some((offset, c)) = self.rest.peek() {
+                        if matches!(c, 'u' | 'U' | 'l' | 'L' | 'f' | 'F' | 'z' | 'Z') {
+                            end_offset = offset + c.len_utf8();
+                            self.rest.next();
+                        } else {
+                            break;
+                        }
+                    }
+
+                    return new_token!(self, c_at, end_offset - c_at, TokenKind::Number);
                 }
                 '{' => return new_token!(self, c_at, 1, TokenKind::LeftBrace),
                 '}' => return new_token!(self, c_at, 1, TokenKind::RightBrace),
@@ -561,6 +626,8 @@ impl<'de> Iterator for Lexer<'de> {
                                 return new_token!(self, c_at, 1, TokenKind::LeftChevron);
                             }
                         }
+                    } else {
+                        return new_token!(self, c_at, 1, TokenKind::LeftChevron);
                     }
                 }
                 '>' => {
@@ -588,6 +655,8 @@ impl<'de> Iterator for Lexer<'de> {
                                 return new_token!(self, c_at, 1, TokenKind::RightChevron);
                             }
                         }
+                    } else {
+                        return new_token!(self, c_at, 1, TokenKind::RightChevron);
                     }
                 }
                 '%' => {
@@ -599,20 +668,21 @@ impl<'de> Iterator for Lexer<'de> {
                             }
                             ':' => {
                                 self.rest.next();
-                                if let Some((_, '%')) = self.rest.peek() {
+                                let mut chars_clone = self.rest.clone();
+                                if let Some((_, '%')) = chars_clone.next()
+                                    && let Some((_, ':')) = chars_clone.next()
+                                {
                                     self.rest.next();
-                                    if let Some((_, ':')) = self.rest.peek() {
-                                        self.rest.next();
-                                        return new_token!(
-                                            self,
-                                            c_at,
-                                            4,
-                                            TokenKind::DoubleNumberSign
-                                        );
-                                    }
+                                    self.rest.next();
+                                    return new_token!(
+                                        self,
+                                        c_at,
+                                        4,
+                                        TokenKind::DoubleNumberSign
+                                    );
+                                } else {
+                                    return new_token!(self, c_at, 2, TokenKind::NumberSign);
                                 }
-
-                                return new_token!(self, c_at, 2, TokenKind::NumberSign);
                             }
                             '>' => {
                                 self.rest.next();
@@ -622,6 +692,8 @@ impl<'de> Iterator for Lexer<'de> {
                                 return new_token!(self, c_at, 1, TokenKind::Modulo);
                             }
                         }
+                    } else {
+                        return new_token!(self, c_at, 1, TokenKind::Modulo);
                     }
                 }
                 ':' => {
@@ -639,13 +711,36 @@ impl<'de> Iterator for Lexer<'de> {
                                 return new_token!(self, c_at, 1, TokenKind::Colon);
                             }
                         }
+                    } else {
+                        return new_token!(self, c_at, 1, TokenKind::Colon);
                     }
                 }
                 ';' => return new_token!(self, c_at, 1, TokenKind::Semicolon),
                 '.' => {
-                    if let Some((_, '*')) = self.rest.peek() {
-                        self.rest.next();
-                        return new_token!(self, c_at, 2, TokenKind::PointerObjMember);
+                    if let Some((_, next_c)) = self.rest.peek() {
+                        match next_c {
+                            '*' => {
+                                self.rest.next();
+                                return new_token!(self, c_at, 2, TokenKind::PointerObjMember);
+                            }
+                            '.' => {
+                                self.rest.next();
+                                if let Some((_, '.')) = self.rest.peek() {
+                                    self.rest.next();
+                                    return new_token!(self, c_at, 3, TokenKind::Ellipsis);
+                                } else {
+                                    // C++ can't contain two dots in a row.
+                                    return Some(Err(SingleTokenError {
+                                        src: self.src.to_string(),
+                                        token: '.',
+                                        err_span: SourceSpan::new(self.src, c_at, 2).into(),
+                                    }.into()));
+                                }
+                            }
+                            _ => {
+                                return new_token!(self, c_at, 1, TokenKind::Dot);
+                            }
+                        }
                     } else {
                         return new_token!(self, c_at, 1, TokenKind::Dot);
                     }
@@ -674,6 +769,8 @@ impl<'de> Iterator for Lexer<'de> {
                                 return new_token!(self, c_at, 1, TokenKind::Plus);
                             }
                         }
+                    } else {
+                        return new_token!(self, c_at, 1, TokenKind::Plus);
                     }
                 }
                 '-' => {
@@ -700,6 +797,8 @@ impl<'de> Iterator for Lexer<'de> {
                                 return new_token!(self, c_at, 1, TokenKind::Minus);
                             }
                         }
+                    } else {
+                        return new_token!(self, c_at, 1, TokenKind::Minus);
                     }
                 }
                 '/' => {
@@ -707,22 +806,28 @@ impl<'de> Iterator for Lexer<'de> {
                         match c {
                             '*' => {
                                 self.rest.next();
-                                while let Some((_, c)) = self.rest.next() {
+                                let mut last_offset = c_at + 2;
+                                while let Some((offset, c)) = self.rest.next() {
+                                    last_offset = offset + c.len_utf8();
                                     if c == '*'
-                                        && let Some((offset, '/')) = self.rest.next()
+                                        && let Some((end_offset, '/')) = self.rest.peek().copied()
                                     {
+                                        self.rest.next();
                                         return new_token!(
                                             self,
                                             c_at,
-                                            offset + 1 - c_at,
+                                            end_offset + 1 - c_at,
                                             TokenKind::Comment
                                         );
                                     }
                                 }
+                                // Unterminated comment - return what we have
+                                return new_token!(self, c_at, last_offset - c_at, TokenKind::Comment);
                             }
                             '/' => {
                                 self.rest.next();
-                                while let Some((offset, c)) = self.rest.next() {
+                                let mut last_offset = c_at + 2;
+                                while let Some((offset, c)) = self.rest.peek().copied() {
                                     if c == '\n' {
                                         return new_token!(
                                             self,
@@ -731,7 +836,11 @@ impl<'de> Iterator for Lexer<'de> {
                                             TokenKind::Comment
                                         );
                                     }
+                                    last_offset = offset + c.len_utf8();
+                                    self.rest.next();
                                 }
+
+                                return new_token!(self, c_at, last_offset - c_at, TokenKind::Comment);
                             }
                             '=' => {
                                 self.rest.next();
@@ -741,6 +850,8 @@ impl<'de> Iterator for Lexer<'de> {
                                 return new_token!(self, c_at, 1, TokenKind::Div);
                             }
                         }
+                    } else {
+                        return new_token!(self, c_at, 1, TokenKind::Div);
                     }
                 }
                 '^' => {
@@ -766,6 +877,8 @@ impl<'de> Iterator for Lexer<'de> {
                                 return new_token!(self, c_at, 1, TokenKind::BitAnd);
                             }
                         }
+                    } else {
+                        return new_token!(self, c_at, 1, TokenKind::BitAnd);
                     }
                 }
                 '|' => {
@@ -783,6 +896,8 @@ impl<'de> Iterator for Lexer<'de> {
                                 return new_token!(self, c_at, 1, TokenKind::BitOr);
                             }
                         }
+                    } else {
+                        return new_token!(self, c_at, 1, TokenKind::BitOr);
                     }
                 }
                 '~' => return new_token!(self, c_at, 1, TokenKind::Compl),
@@ -1158,6 +1273,16 @@ mod tests {
         assert_eq!(
             Some(Err(String::from("Wrong token separator `'`"))),
             wrong_mult_char2_lex
+                .next()
+                .map(|t| t.map_err(|e| e.to_string()))
+        );
+
+        let wrong_two_dot = r#"var..method();"#;
+        let mut wrong_two_dot_lex = Lexer::new(wrong_two_dot);
+        assert!(next_is_kind!(wrong_two_dot_lex, TokenKind::Ident)); // `var`
+        assert_eq!(
+            Some(Err(String::from("Unexpected token '.'"))),
+            wrong_two_dot_lex
                 .next()
                 .map(|t| t.map_err(|e| e.to_string()))
         );
@@ -1584,5 +1709,145 @@ mod tests {
         }
 
         assert!(operations_lex.next().is_none());
+    }
+
+    #[test]
+    fn ellipsis_lex() {
+        let variadic = "template<typename... Args>";
+        let mut lex = Lexer::new(variadic);
+        assert_eq!(Some(TokenKind::KeywordTemplate), next_kind!(lex));
+        assert_eq!(Some(TokenKind::LeftChevron), next_kind!(lex));
+        assert_eq!(Some(TokenKind::KeywordTypename), next_kind!(lex));
+        assert_eq!(Some(TokenKind::Ellipsis), next_kind!(lex));
+        assert_eq!(
+            Some("Token { src: \"Args\", kind: Ident }".to_string()),
+            next_dbg!(lex)
+        );
+        assert_eq!(Some(TokenKind::RightChevron), next_kind!(lex));
+        assert!(lex.next().is_none());
+    }
+
+    #[test]
+    fn numbers_lex() {
+        // Hexadecimal
+        let mut lex = Lexer::new("0xFF 0x1a2B");
+        assert_eq!(
+            Some("Token { src: \"0xFF\", kind: Number }".to_string()),
+            next_dbg!(lex)
+        );
+        assert_eq!(
+            Some("Token { src: \"0x1a2B\", kind: Number }".to_string()),
+            next_dbg!(lex)
+        );
+
+        // Binary
+        let mut lex = Lexer::new("0b1010 0B1111");
+        assert_eq!(
+            Some("Token { src: \"0b1010\", kind: Number }".to_string()),
+            next_dbg!(lex)
+        );
+        assert_eq!(
+            Some("Token { src: \"0B1111\", kind: Number }".to_string()),
+            next_dbg!(lex)
+        );
+
+        // Digit separators
+        let mut lex = Lexer::new("1'000'000");
+        assert_eq!(
+            Some("Token { src: \"1'000'000\", kind: Number }".to_string()),
+            next_dbg!(lex)
+        );
+
+        // Suffixes
+        let mut lex = Lexer::new("1u 2UL 3ull 4.0f");
+        assert_eq!(
+            Some("Token { src: \"1u\", kind: Number }".to_string()),
+            next_dbg!(lex)
+        );
+        assert_eq!(
+            Some("Token { src: \"2UL\", kind: Number }".to_string()),
+            next_dbg!(lex)
+        );
+        assert_eq!(
+            Some("Token { src: \"3ull\", kind: Number }".to_string()),
+            next_dbg!(lex)
+        );
+        assert_eq!(
+            Some("Token { src: \"4.0f\", kind: Number }".to_string()),
+            next_dbg!(lex)
+        );
+
+        // Scientific notation
+        let mut lex = Lexer::new("1e10 2.5E-3");
+        assert_eq!(
+            Some("Token { src: \"1e10\", kind: Number }".to_string()),
+            next_dbg!(lex)
+        );
+        assert_eq!(
+            Some("Token { src: \"2.5E-3\", kind: Number }".to_string()),
+            next_dbg!(lex)
+        );
+    }
+
+    #[test]
+    fn eof_tokens_lex() {
+        // Test tokens at EOF without trailing whitespace
+        let mut lex = Lexer::new("test");
+        assert_eq!(
+            Some("Token { src: \"test\", kind: Ident }".to_string()),
+            next_dbg!(lex)
+        );
+
+        let mut lex = Lexer::new("123");
+        assert_eq!(
+            Some("Token { src: \"123\", kind: Number }".to_string()),
+            next_dbg!(lex)
+        );
+
+        let mut lex = Lexer::new("<");
+        assert_eq!(Some(TokenKind::LeftChevron), next_kind!(lex));
+
+        let mut lex = Lexer::new(">");
+        assert_eq!(Some(TokenKind::RightChevron), next_kind!(lex));
+
+        let mut lex = Lexer::new("+");
+        assert_eq!(Some(TokenKind::Plus), next_kind!(lex));
+
+        let mut lex = Lexer::new("-");
+        assert_eq!(Some(TokenKind::Minus), next_kind!(lex));
+
+        let mut lex = Lexer::new("&");
+        assert_eq!(Some(TokenKind::BitAnd), next_kind!(lex));
+
+        let mut lex = Lexer::new("|");
+        assert_eq!(Some(TokenKind::BitOr), next_kind!(lex));
+
+        let mut lex = Lexer::new(":");
+        assert_eq!(Some(TokenKind::Colon), next_kind!(lex));
+
+        let mut lex = Lexer::new("/");
+        assert_eq!(Some(TokenKind::Div), next_kind!(lex));
+
+        let mut lex = Lexer::new("%");
+        assert_eq!(Some(TokenKind::Modulo), next_kind!(lex));
+
+        // Comment at EOF without newline
+        let mut lex = Lexer::new("// comment at eof");
+        assert_eq!(
+            Some("Token { src: \"// comment at eof\", kind: Comment }".to_string()),
+            next_dbg!(lex)
+        );
+    }
+
+    #[test]
+    fn peekable_lexer() {
+        let mut lex = Lexer::new("int x;").peekable();
+
+        // Peek should return the token without consuming
+        assert_eq!(Some(TokenKind::KeywordInt), lex.peek().and_then(|t| t.as_ref().ok().map(|t| t.kind())));
+        assert_eq!(Some(TokenKind::KeywordInt), lex.peek().and_then(|t| t.as_ref().ok().map(|t| t.kind())));
+
+        lex.next();
+        assert_ne!(Some(TokenKind::KeywordInt), lex.peek().and_then(|t| t.as_ref().ok().map(|t| t.kind())));
     }
 }
