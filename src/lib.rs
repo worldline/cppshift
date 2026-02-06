@@ -1,3 +1,4 @@
+pub mod ast;
 pub mod lex;
 pub use lex::Lexer;
 
