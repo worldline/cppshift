@@ -3,8 +3,8 @@
 //! Each variant of [`Item`] corresponds to a top-level declaration in a C++ translation unit,
 //! following the naming conventions of `syn::Item`.
 
-use crate::lex::Token;
 use crate::SourceSpan;
+use crate::lex::Token;
 
 use super::expr::Expr;
 use super::punct::Punctuated;

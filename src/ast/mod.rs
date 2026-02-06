@@ -8,6 +8,7 @@
 pub mod error;
 pub mod expr;
 pub mod item;
+mod parse;
 pub mod punct;
 pub mod stmt;
 pub mod ty;
@@ -37,6 +38,59 @@ pub struct File<'de> {
 /// # Errors
 ///
 /// Returns a `ParseError` if the source code contains syntax errors.
-pub fn parse_file(_content: &str) -> Result<File<'_>, ParseError> {
-    todo!("parse_file implementation")
+pub fn parse_file<'de>(content: &'de str) -> Result<File<'de>, ParseError> {
+    parse::parse_file(content)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Test the ast parser with the gtest main file from google
+    #[tokio::test]
+    async fn gtests_ast() {
+        let gtest_src = reqwest::get("https://raw.githubusercontent.com/google/googletest/refs/heads/main/googletest/src/gtest.cc")
+            .await.unwrap()
+            .text()
+            .await.unwrap();
+        assert!(!gtest_src.is_empty());
+
+        let parsed_file = parse_file(&gtest_src).unwrap();
+        assert!(
+            !parsed_file.items.is_empty()
+        );
+    }
+
+    /// Test the ast parser with a simple main function that includes a switch statement and a fallthrough attribute
+    #[tokio::test]
+    async fn main_ast() {
+            let main = r#"
+            #include <iostream>
+
+            #define ArgText(x) \
+                x##TEXT
+
+            // main function
+            int main(int argc, char* argv[]) {
+                std::cout << "Hello, world" << std::endl;
+                switch (argc)
+                {
+                    case 1:
+                    case 2:
+                        std::cout << "first and second" << std::endl;
+                        [[fallthrough]];
+                    case 3:
+                        std::cout << "fallthrough" << std::endl;
+                        break;
+                }
+
+                return 0;
+            }
+        "#;
+
+        let main_file = parse_file(main).unwrap();
+        assert!(
+            !main_file.items.is_empty()
+        );
+    }
 }

@@ -51,6 +51,8 @@ pub enum Stmt<'de> {
     Default(StmtDefault<'de>),
     /// Try/catch: `try { } catch (...) { }`
     TryCatch(StmtTryCatch<'de>),
+    /// Compound statement (block): `{ stmts... }`
+    Block(Block<'de>),
     /// Empty statement: `;`
     Empty,
 }

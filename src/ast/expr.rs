@@ -271,7 +271,7 @@ pub struct ExprSizeof<'de> {
 /// `alignof` expression.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExprAlignof<'de> {
-    pub operand: Box<Expr<'de>>,
+    pub ty: Box<super::ty::Type<'de>>,
 }
 
 /// `new` expression.

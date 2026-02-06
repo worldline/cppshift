@@ -681,7 +681,8 @@ impl<'de> Iterator for Lexer<'de> {
                                 _ => {
                                     // Decimal or octal - parse all valid chars
                                     while let Some((offset, c)) = self.rest.peek() {
-                                        if matches!(c, '0'..='9' | '.' | 'e' | 'E' | '+' | '-' | '\'' | 'a'..='z' | 'A'..='Z') {
+                                        if matches!(c, '0'..='9' | '.' | 'e' | 'E' | '+' | '-' | '\'' | 'a'..='z' | 'A'..='Z')
+                                        {
                                             end_offset = offset + c.len_utf8();
                                             self.rest.next();
                                         } else {
@@ -694,7 +695,8 @@ impl<'de> Iterator for Lexer<'de> {
                     } else {
                         // Regular decimal number with possible exponent and suffix
                         while let Some((offset, c)) = self.rest.peek() {
-                            if matches!(c, '0'..='9' | '.' | 'e' | 'E' | '+' | '-' | '\'' | 'a'..='z' | 'A'..='Z') {
+                            if matches!(c, '0'..='9' | '.' | 'e' | 'E' | '+' | '-' | '\'' | 'a'..='z' | 'A'..='Z')
+                            {
                                 end_offset = offset + c.len_utf8();
                                 self.rest.next();
                             } else {
@@ -828,12 +830,7 @@ impl<'de> Iterator for Lexer<'de> {
                                 {
                                     self.rest.next();
                                     self.rest.next();
-                                    return new_token!(
-                                        self,
-                                        c_at,
-                                        4,
-                                        TokenKind::DoubleNumberSign
-                                    );
+                                    return new_token!(self, c_at, 4, TokenKind::DoubleNumberSign);
                                 } else {
                                     return new_token!(self, c_at, 2, TokenKind::NumberSign);
                                 }
@@ -888,7 +885,8 @@ impl<'de> Iterator for Lexer<'de> {
                                         src: self.src.to_string(),
                                         token: '.',
                                         err_span: SourceSpan::new(self.src, c_at, 2).into(),
-                                    }.into()));
+                                    }
+                                    .into()));
                                 }
                             }
                             _ => {
@@ -976,7 +974,12 @@ impl<'de> Iterator for Lexer<'de> {
                                     }
                                 }
                                 // Unterminated comment - return what we have
-                                return new_token!(self, c_at, last_offset - c_at, TokenKind::Comment);
+                                return new_token!(
+                                    self,
+                                    c_at,
+                                    last_offset - c_at,
+                                    TokenKind::Comment
+                                );
                             }
                             '/' => {
                                 self.rest.next();
@@ -994,7 +997,12 @@ impl<'de> Iterator for Lexer<'de> {
                                     self.rest.next();
                                 }
 
-                                return new_token!(self, c_at, last_offset - c_at, TokenKind::Comment);
+                                return new_token!(
+                                    self,
+                                    c_at,
+                                    last_offset - c_at,
+                                    TokenKind::Comment
+                                );
                             }
                             '=' => {
                                 self.rest.next();
@@ -1998,10 +2006,19 @@ mod tests {
         let mut lex = Lexer::new("int x;").peekable();
 
         // Peek should return the token without consuming
-        assert_eq!(Some(TokenKind::KeywordInt), lex.peek().and_then(|t| t.as_ref().ok().map(|t| t.kind())));
-        assert_eq!(Some(TokenKind::KeywordInt), lex.peek().and_then(|t| t.as_ref().ok().map(|t| t.kind())));
+        assert_eq!(
+            Some(TokenKind::KeywordInt),
+            lex.peek().and_then(|t| t.as_ref().ok().map(|t| t.kind()))
+        );
+        assert_eq!(
+            Some(TokenKind::KeywordInt),
+            lex.peek().and_then(|t| t.as_ref().ok().map(|t| t.kind()))
+        );
 
         lex.next();
-        assert_ne!(Some(TokenKind::KeywordInt), lex.peek().and_then(|t| t.as_ref().ok().map(|t| t.kind())));
+        assert_ne!(
+            Some(TokenKind::KeywordInt),
+            lex.peek().and_then(|t| t.as_ref().ok().map(|t| t.kind()))
+        );
     }
 }
