@@ -3,11 +3,11 @@
 use miette::Diagnostic;
 use thiserror::Error;
 
-use crate::lex::TokenKind;
+use crate::lex::{LexError, TokenKind};
 
 /// Errors that can occur during parsing
 #[derive(Diagnostic, Debug, Error)]
-pub enum ParseError {
+pub enum AstError {
     /// Unexpected end of input
     #[error("Unexpected end of input, expected {expected}")]
     UnexpectedEof {
@@ -17,9 +17,8 @@ pub enum ParseError {
         #[label = "input ends here"]
         err_span: miette::SourceSpan,
     },
-
     /// Wrong token type encountered
-    #[error("Expected {expected}, found `{found}`")]
+    #[error("Expected {expected}, found `{found:?}`")]
     UnexpectedToken {
         expected: String,
         found: TokenKind,
@@ -28,7 +27,6 @@ pub enum ParseError {
         #[label = "this token"]
         err_span: miette::SourceSpan,
     },
-
     /// Custom parse error with a message
     #[error("{message}")]
     Custom {
@@ -38,8 +36,13 @@ pub enum ParseError {
         #[label = "{message}"]
         err_span: miette::SourceSpan,
     },
-
     /// Lexer error forwarded during ParseStream construction
     #[error("Lexer error: {0}")]
-    LexerError(String),
+    LexerError(LexError),
+}
+
+impl From<LexError> for AstError {
+    fn from(lex_err: LexError) -> Self {
+        AstError::LexerError(lex_err)
+    }
 }

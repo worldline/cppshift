@@ -6,7 +6,7 @@ use crate::SourceSpan;
 use crate::lex::{Lexer, Token, TokenKind};
 
 use super::File;
-use super::error::ParseError;
+use super::error::AstError;
 use super::expr::*;
 use super::item::*;
 use super::punct::Punctuated;
@@ -24,10 +24,10 @@ pub(super) struct Parser<'de> {
 }
 
 impl<'de> Parser<'de> {
-    pub fn new(src: &'de str) -> Result<Self, ParseError> {
+    pub fn new(src: &'de str) -> Result<Self, AstError> {
         let mut tokens = Vec::new();
         for result in Lexer::new(src) {
-            let token = result.map_err(|e| ParseError::LexerError(e.to_string()))?;
+            let token = result?;
             if token.kind() != TokenKind::Comment {
                 tokens.push(token);
             }
@@ -55,7 +55,7 @@ impl<'de> Parser<'de> {
         self.peek_nth(n).map(|t| t.kind())
     }
 
-    fn bump(&mut self) -> Result<Token<'de>, ParseError> {
+    fn bump(&mut self) -> Result<Token<'de>, AstError> {
         if self.cursor < self.tokens.len() {
             let token = self.tokens[self.cursor];
             self.cursor += 1;
@@ -65,16 +65,16 @@ impl<'de> Parser<'de> {
         }
     }
 
-    fn expect(&mut self, kind: TokenKind) -> Result<Token<'de>, ParseError> {
+    fn expect(&mut self, kind: TokenKind) -> Result<Token<'de>, AstError> {
         match self.peek() {
             Some(token) if token.kind() == kind => self.bump(),
-            Some(token) => Err(ParseError::UnexpectedToken {
-                expected: kind.to_string(),
+            Some(token) => Err(AstError::UnexpectedToken {
+                expected: format!("{kind:?}"),
                 found: token.kind(),
                 src: self.src.to_string(),
                 err_span: token.src_span().into(),
             }),
-            None => Err(self.eof_error(&kind.to_string())),
+            None => Err(self.eof_error(&format!("{kind:?}"))),
         }
     }
 
@@ -116,17 +116,17 @@ impl<'de> Parser<'de> {
         )
     }
 
-    fn eof_error(&self, expected: &str) -> ParseError {
-        ParseError::UnexpectedEof {
+    fn eof_error(&self, expected: &str) -> AstError {
+        AstError::UnexpectedEof {
             expected: expected.to_string(),
             src: self.src.to_string(),
             err_span: miette::SourceSpan::new(self.src.len().into(), 0),
         }
     }
 
-    fn error_at_current(&self, message: &str) -> ParseError {
+    fn error_at_current(&self, message: &str) -> AstError {
         match self.peek() {
-            Some(tok) => ParseError::Custom {
+            Some(tok) => AstError::Custom {
                 message: message.to_string(),
                 src: self.src.to_string(),
                 err_span: tok.src_span().into(),
@@ -140,7 +140,7 @@ impl<'de> Parser<'de> {
 // Top-level: parse_file
 // ---------------------------------------------------------------------------
 
-pub(super) fn parse_file<'de>(src: &'de str) -> Result<File<'de>, ParseError> {
+pub(super) fn parse_file<'de>(src: &'de str) -> Result<File<'de>, AstError> {
     let mut parser = Parser::new(src)?;
     let mut items = Vec::new();
 
@@ -158,7 +158,7 @@ pub(super) fn parse_file<'de>(src: &'de str) -> Result<File<'de>, ParseError> {
 // Attributes: [[...]]
 // ---------------------------------------------------------------------------
 
-fn parse_attributes<'de>(p: &mut Parser<'de>) -> Result<Vec<Attribute<'de>>, ParseError> {
+fn parse_attributes<'de>(p: &mut Parser<'de>) -> Result<Vec<Attribute<'de>>, AstError> {
     let mut attrs = Vec::new();
     while p.peek_kind() == Some(TokenKind::DoubleLeftBracket) {
         attrs.push(parse_attribute(p)?);
@@ -166,7 +166,7 @@ fn parse_attributes<'de>(p: &mut Parser<'de>) -> Result<Vec<Attribute<'de>>, Par
     Ok(attrs)
 }
 
-fn parse_attribute<'de>(p: &mut Parser<'de>) -> Result<Attribute<'de>, ParseError> {
+fn parse_attribute<'de>(p: &mut Parser<'de>) -> Result<Attribute<'de>, AstError> {
     let cp = p.checkpoint();
     p.expect(TokenKind::DoubleLeftBracket)?;
 
@@ -208,7 +208,7 @@ fn parse_attribute<'de>(p: &mut Parser<'de>) -> Result<Attribute<'de>, ParseErro
 // Item parsing
 // ---------------------------------------------------------------------------
 
-fn parse_item<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, ParseError> {
+fn parse_item<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError> {
     // Skip preprocessor directives (lines starting with #)
     if p.peek_kind() == Some(TokenKind::NumberSign) {
         return parse_item_macro(p).map(Item::Macro);
@@ -310,7 +310,7 @@ fn set_item_attrs<'de>(mut item: Item<'de>, attrs: Vec<Attribute<'de>>) -> Item<
 // Preprocessor macro: # ... (until end of logical line)
 // ---------------------------------------------------------------------------
 
-fn parse_item_macro<'de>(p: &mut Parser<'de>) -> Result<ItemMacro<'de>, ParseError> {
+fn parse_item_macro<'de>(p: &mut Parser<'de>) -> Result<ItemMacro<'de>, AstError> {
     let cp = p.checkpoint();
     let hash_tok = p.expect(TokenKind::NumberSign)?;
     let mut tokens = Vec::new();
@@ -366,7 +366,7 @@ fn parse_item_macro<'de>(p: &mut Parser<'de>) -> Result<ItemMacro<'de>, ParseErr
 // Namespace
 // ---------------------------------------------------------------------------
 
-fn parse_item_namespace<'de>(p: &mut Parser<'de>) -> Result<ItemNamespace<'de>, ParseError> {
+fn parse_item_namespace<'de>(p: &mut Parser<'de>) -> Result<ItemNamespace<'de>, AstError> {
     let inline_token = p.eat(TokenKind::KeywordInline).is_some();
     p.expect(TokenKind::KeywordNamespace)?;
 
@@ -419,7 +419,7 @@ fn parse_item_namespace<'de>(p: &mut Parser<'de>) -> Result<ItemNamespace<'de>, 
 // static_assert
 // ---------------------------------------------------------------------------
 
-fn parse_item_static_assert<'de>(p: &mut Parser<'de>) -> Result<ItemStaticAssert<'de>, ParseError> {
+fn parse_item_static_assert<'de>(p: &mut Parser<'de>) -> Result<ItemStaticAssert<'de>, AstError> {
     p.expect(TokenKind::KeywordStaticAssert)?;
     p.expect(TokenKind::LeftParenthese)?;
     let expr = parse_expr(p)?;
@@ -437,7 +437,7 @@ fn parse_item_static_assert<'de>(p: &mut Parser<'de>) -> Result<ItemStaticAssert
 // Using (declaration, directive, alias)
 // ---------------------------------------------------------------------------
 
-fn parse_item_using<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, ParseError> {
+fn parse_item_using<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError> {
     p.expect(TokenKind::KeywordUsing)?;
 
     // using namespace path;
@@ -477,7 +477,7 @@ fn parse_item_using<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, ParseError> {
 // Typedef
 // ---------------------------------------------------------------------------
 
-fn parse_item_typedef<'de>(p: &mut Parser<'de>) -> Result<ItemTypedef<'de>, ParseError> {
+fn parse_item_typedef<'de>(p: &mut Parser<'de>) -> Result<ItemTypedef<'de>, AstError> {
     p.expect(TokenKind::KeywordTypedef)?;
     let ty = parse_type(p)?;
     let ident = parse_ident(p)?;
@@ -493,7 +493,7 @@ fn parse_item_typedef<'de>(p: &mut Parser<'de>) -> Result<ItemTypedef<'de>, Pars
 // Enum
 // ---------------------------------------------------------------------------
 
-fn parse_item_enum<'de>(p: &mut Parser<'de>) -> Result<ItemEnum<'de>, ParseError> {
+fn parse_item_enum<'de>(p: &mut Parser<'de>) -> Result<ItemEnum<'de>, AstError> {
     p.expect(TokenKind::KeywordEnum)?;
     let scoped =
         p.eat(TokenKind::KeywordClass).is_some() || p.eat(TokenKind::KeywordStruct).is_some();
@@ -548,7 +548,7 @@ fn parse_item_enum<'de>(p: &mut Parser<'de>) -> Result<ItemEnum<'de>, ParseError
 // Struct
 // ---------------------------------------------------------------------------
 
-fn parse_item_struct<'de>(p: &mut Parser<'de>) -> Result<ItemStruct<'de>, ParseError> {
+fn parse_item_struct<'de>(p: &mut Parser<'de>) -> Result<ItemStruct<'de>, AstError> {
     p.expect(TokenKind::KeywordStruct)?;
 
     let ident = if p.peek_kind() == Some(TokenKind::Ident) {
@@ -591,7 +591,7 @@ fn parse_item_struct<'de>(p: &mut Parser<'de>) -> Result<ItemStruct<'de>, ParseE
 // Class
 // ---------------------------------------------------------------------------
 
-fn parse_item_class<'de>(p: &mut Parser<'de>) -> Result<ItemClass<'de>, ParseError> {
+fn parse_item_class<'de>(p: &mut Parser<'de>) -> Result<ItemClass<'de>, AstError> {
     p.expect(TokenKind::KeywordClass)?;
 
     let ident = if p.peek_kind() == Some(TokenKind::Ident) {
@@ -634,7 +634,7 @@ fn parse_item_class<'de>(p: &mut Parser<'de>) -> Result<ItemClass<'de>, ParseErr
 // Union
 // ---------------------------------------------------------------------------
 
-fn parse_item_union<'de>(p: &mut Parser<'de>) -> Result<ItemUnion<'de>, ParseError> {
+fn parse_item_union<'de>(p: &mut Parser<'de>) -> Result<ItemUnion<'de>, AstError> {
     p.expect(TokenKind::KeywordUnion)?;
     let ident = if p.peek_kind() == Some(TokenKind::Ident) {
         Some(parse_ident(p)?)
@@ -654,7 +654,7 @@ fn parse_item_union<'de>(p: &mut Parser<'de>) -> Result<ItemUnion<'de>, ParseErr
 // Template
 // ---------------------------------------------------------------------------
 
-fn parse_item_template<'de>(p: &mut Parser<'de>) -> Result<ItemTemplate<'de>, ParseError> {
+fn parse_item_template<'de>(p: &mut Parser<'de>) -> Result<ItemTemplate<'de>, AstError> {
     p.expect(TokenKind::KeywordTemplate)?;
     p.expect(TokenKind::LeftChevron)?;
 
@@ -679,7 +679,7 @@ fn parse_item_template<'de>(p: &mut Parser<'de>) -> Result<ItemTemplate<'de>, Pa
     })
 }
 
-fn parse_template_param<'de>(p: &mut Parser<'de>) -> Result<TemplateParam<'de>, ParseError> {
+fn parse_template_param<'de>(p: &mut Parser<'de>) -> Result<TemplateParam<'de>, AstError> {
     // typename T / class T / typename... Args
     if p.peek_kind() == Some(TokenKind::KeywordTypename)
         || p.peek_kind() == Some(TokenKind::KeywordClass)
@@ -721,7 +721,7 @@ fn parse_template_param<'de>(p: &mut Parser<'de>) -> Result<TemplateParam<'de>, 
 // extern "C" { ... }
 // ---------------------------------------------------------------------------
 
-fn parse_item_foreign_mod<'de>(p: &mut Parser<'de>) -> Result<ItemForeignMod<'de>, ParseError> {
+fn parse_item_foreign_mod<'de>(p: &mut Parser<'de>) -> Result<ItemForeignMod<'de>, AstError> {
     p.expect(TokenKind::KeywordExtern)?;
     let abi_tok = p.expect(TokenKind::String)?;
     // Strip quotes from abi string
@@ -763,7 +763,7 @@ fn parse_item_foreign_mod<'de>(p: &mut Parser<'de>) -> Result<ItemForeignMod<'de
 // Function or variable declaration (the ambiguous case)
 // ---------------------------------------------------------------------------
 
-fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, ParseError> {
+fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError> {
     // Parse leading specifiers
     let mut constexpr_token = false;
     let mut consteval_token = false;
@@ -1477,7 +1477,7 @@ fn is_const_type(ty: &Type) -> bool {
 // Function parameters
 // ---------------------------------------------------------------------------
 
-fn parse_fn_params<'de>(p: &mut Parser<'de>) -> Result<Punctuated<'de, FnArg<'de>>, ParseError> {
+fn parse_fn_params<'de>(p: &mut Parser<'de>) -> Result<Punctuated<'de, FnArg<'de>>, AstError> {
     p.expect(TokenKind::LeftParenthese)?;
     let mut params = Punctuated::new();
 
@@ -1582,9 +1582,7 @@ fn parse_fn_params<'de>(p: &mut Parser<'de>) -> Result<Punctuated<'de, FnArg<'de
     Ok(params)
 }
 
-fn parse_fn_param<'de>(
-    p: &mut Parser<'de>,
-) -> Result<(FnArg<'de>, Option<Token<'de>>), ParseError> {
+fn parse_fn_param<'de>(p: &mut Parser<'de>) -> Result<(FnArg<'de>, Option<Token<'de>>), AstError> {
     let ty = parse_type(p)?;
 
     // Handle array declarator after ident: int arr[]
@@ -1640,7 +1638,7 @@ fn parse_fn_param<'de>(
 // Base specifiers: public Base, virtual protected Interface
 // ---------------------------------------------------------------------------
 
-fn parse_base_specifiers<'de>(p: &mut Parser<'de>) -> Result<Vec<BaseSpecifier<'de>>, ParseError> {
+fn parse_base_specifiers<'de>(p: &mut Parser<'de>) -> Result<Vec<BaseSpecifier<'de>>, AstError> {
     let mut bases = Vec::new();
     loop {
         let mut access = Visibility::Inherited;
@@ -1690,7 +1688,7 @@ fn parse_base_specifiers<'de>(p: &mut Parser<'de>) -> Result<Vec<BaseSpecifier<'
 fn parse_fields_named<'de>(
     p: &mut Parser<'de>,
     class_name: Option<&str>,
-) -> Result<FieldsNamed<'de>, ParseError> {
+) -> Result<FieldsNamed<'de>, AstError> {
     p.expect(TokenKind::LeftBrace)?;
     let mut members = Vec::new();
 
@@ -1943,7 +1941,7 @@ fn parse_fields_named<'de>(
 // Block
 // ---------------------------------------------------------------------------
 
-fn parse_block<'de>(p: &mut Parser<'de>) -> Result<Block<'de>, ParseError> {
+fn parse_block<'de>(p: &mut Parser<'de>) -> Result<Block<'de>, AstError> {
     p.expect(TokenKind::LeftBrace)?;
     let mut stmts = Vec::new();
     while p.peek_kind() != Some(TokenKind::RightBrace) && !p.is_empty() {
@@ -1957,7 +1955,7 @@ fn parse_block<'de>(p: &mut Parser<'de>) -> Result<Block<'de>, ParseError> {
 // Statements (simplified — enough to parse function bodies)
 // ---------------------------------------------------------------------------
 
-fn parse_stmt<'de>(p: &mut Parser<'de>) -> Result<Stmt<'de>, ParseError> {
+fn parse_stmt<'de>(p: &mut Parser<'de>) -> Result<Stmt<'de>, AstError> {
     // Skip preprocessor directives inside function bodies
     if p.peek_kind() == Some(TokenKind::NumberSign) {
         let macro_item = parse_item_macro(p)?;
@@ -2446,7 +2444,7 @@ fn is_type_start(kind: Option<TokenKind>) -> bool {
     )
 }
 
-fn parse_type<'de>(p: &mut Parser<'de>) -> Result<Type<'de>, ParseError> {
+fn parse_type<'de>(p: &mut Parser<'de>) -> Result<Type<'de>, AstError> {
     // CV qualifiers
     let mut cv = CvQualifiers::default();
     while let Some(kind) = p.peek_kind() {
@@ -2480,7 +2478,7 @@ fn parse_type<'de>(p: &mut Parser<'de>) -> Result<Type<'de>, ParseError> {
     parse_type_suffix(p, qualified)
 }
 
-fn parse_base_type<'de>(p: &mut Parser<'de>) -> Result<Type<'de>, ParseError> {
+fn parse_base_type<'de>(p: &mut Parser<'de>) -> Result<Type<'de>, AstError> {
     match p.peek_kind() {
         Some(TokenKind::KeywordVoid) => {
             let tok = p.bump()?;
@@ -2585,7 +2583,7 @@ fn parse_base_type<'de>(p: &mut Parser<'de>) -> Result<Type<'de>, ParseError> {
 fn try_parse_template_inst<'de>(
     p: &mut Parser<'de>,
     path: Path<'de>,
-) -> Result<Type<'de>, ParseError> {
+) -> Result<Type<'de>, AstError> {
     if p.peek_kind() == Some(TokenKind::LeftChevron) {
         let cp = p.checkpoint();
         if let Ok(args) = parse_angle_bracketed_args(p) {
@@ -2612,7 +2610,7 @@ fn try_parse_template_inst<'de>(
 /// Parse `<type_or_expr, type_or_expr, ...>` for template arguments.
 fn parse_angle_bracketed_args<'de>(
     p: &mut Parser<'de>,
-) -> Result<AngleBracketedArgs<'de>, ParseError> {
+) -> Result<AngleBracketedArgs<'de>, AstError> {
     p.expect(TokenKind::LeftChevron)?;
     let mut args = Vec::new();
     if p.peek_kind() == Some(TokenKind::RightChevron) {
@@ -2664,7 +2662,7 @@ fn parse_angle_bracketed_args<'de>(
     Ok(AngleBracketedArgs { args })
 }
 
-fn parse_integer_type<'de>(p: &mut Parser<'de>) -> Result<Type<'de>, ParseError> {
+fn parse_integer_type<'de>(p: &mut Parser<'de>) -> Result<Type<'de>, AstError> {
     let cp = p.checkpoint();
     let mut _has_signed = false;
     let mut has_unsigned = false;
@@ -2738,7 +2736,7 @@ fn parse_integer_type<'de>(p: &mut Parser<'de>) -> Result<Type<'de>, ParseError>
     Ok(Type::Fundamental(TypeFundamental { span, kind }))
 }
 
-fn parse_type_suffix<'de>(p: &mut Parser<'de>, mut ty: Type<'de>) -> Result<Type<'de>, ParseError> {
+fn parse_type_suffix<'de>(p: &mut Parser<'de>, mut ty: Type<'de>) -> Result<Type<'de>, AstError> {
     loop {
         match p.peek_kind() {
             Some(TokenKind::Star) => {
@@ -2799,7 +2797,7 @@ fn parse_type_suffix<'de>(p: &mut Parser<'de>, mut ty: Type<'de>) -> Result<Type
 // Path: ident (:: ident)*  or  :: ident (:: ident)*
 // ---------------------------------------------------------------------------
 
-fn parse_path<'de>(p: &mut Parser<'de>) -> Result<Path<'de>, ParseError> {
+fn parse_path<'de>(p: &mut Parser<'de>) -> Result<Path<'de>, AstError> {
     let leading_colon = p.eat(TokenKind::DoubleColon).is_some();
 
     let first = parse_ident(p)?;
@@ -2828,7 +2826,7 @@ fn parse_path<'de>(p: &mut Parser<'de>) -> Result<Path<'de>, ParseError> {
 // Ident
 // ---------------------------------------------------------------------------
 
-fn parse_ident<'de>(p: &mut Parser<'de>) -> Result<Ident<'de>, ParseError> {
+fn parse_ident<'de>(p: &mut Parser<'de>) -> Result<Ident<'de>, AstError> {
     let tok = p.expect(TokenKind::Ident)?;
     Ok(Ident {
         sym: tok.src(),
@@ -2840,15 +2838,15 @@ fn parse_ident<'de>(p: &mut Parser<'de>) -> Result<Ident<'de>, ParseError> {
 // Expression parsing (Pratt parser)
 // ---------------------------------------------------------------------------
 
-fn parse_expr<'de>(p: &mut Parser<'de>) -> Result<Expr<'de>, ParseError> {
+fn parse_expr<'de>(p: &mut Parser<'de>) -> Result<Expr<'de>, AstError> {
     parse_expr_precedence(p, 0)
 }
 
-fn parse_expr_no_comma<'de>(p: &mut Parser<'de>) -> Result<Expr<'de>, ParseError> {
+fn parse_expr_no_comma<'de>(p: &mut Parser<'de>) -> Result<Expr<'de>, AstError> {
     parse_expr_precedence(p, 1)
 }
 
-fn parse_expr_precedence<'de>(p: &mut Parser<'de>, min_prec: u8) -> Result<Expr<'de>, ParseError> {
+fn parse_expr_precedence<'de>(p: &mut Parser<'de>, min_prec: u8) -> Result<Expr<'de>, AstError> {
     let mut lhs = parse_expr_prefix(p)?;
 
     loop {
@@ -3044,7 +3042,7 @@ fn parse_expr_precedence<'de>(p: &mut Parser<'de>, min_prec: u8) -> Result<Expr<
     Ok(lhs)
 }
 
-fn parse_expr_prefix<'de>(p: &mut Parser<'de>) -> Result<Expr<'de>, ParseError> {
+fn parse_expr_prefix<'de>(p: &mut Parser<'de>) -> Result<Expr<'de>, AstError> {
     match p.peek_kind() {
         Some(TokenKind::Minus) => {
             p.bump()?;
@@ -3144,7 +3142,7 @@ fn parse_expr_prefix<'de>(p: &mut Parser<'de>) -> Result<Expr<'de>, ParseError> 
     }
 }
 
-fn parse_new_expr<'de>(p: &mut Parser<'de>, global: bool) -> Result<Expr<'de>, ParseError> {
+fn parse_new_expr<'de>(p: &mut Parser<'de>, global: bool) -> Result<Expr<'de>, AstError> {
     p.expect(TokenKind::KeywordNew)?;
 
     // Optional placement: new (expr) Type
@@ -3231,7 +3229,7 @@ fn parse_new_expr<'de>(p: &mut Parser<'de>, global: bool) -> Result<Expr<'de>, P
     }))
 }
 
-fn parse_delete_expr<'de>(p: &mut Parser<'de>, global: bool) -> Result<Expr<'de>, ParseError> {
+fn parse_delete_expr<'de>(p: &mut Parser<'de>, global: bool) -> Result<Expr<'de>, AstError> {
     p.expect(TokenKind::KeywordDelete)?;
     let array = if p.eat(TokenKind::LeftBracket).is_some() {
         p.expect(TokenKind::RightBracket)?;
@@ -3247,7 +3245,7 @@ fn parse_delete_expr<'de>(p: &mut Parser<'de>, global: bool) -> Result<Expr<'de>
     }))
 }
 
-fn parse_expr_primary<'de>(p: &mut Parser<'de>) -> Result<Expr<'de>, ParseError> {
+fn parse_expr_primary<'de>(p: &mut Parser<'de>) -> Result<Expr<'de>, AstError> {
     match p.peek_kind() {
         Some(TokenKind::Number) => {
             let tok = p.bump()?;
@@ -3542,7 +3540,7 @@ fn parse_expr_primary<'de>(p: &mut Parser<'de>) -> Result<Expr<'de>, ParseError>
                 Ok(Expr::Path(ExprPath { path }))
             }
         }
-        Some(kind) => Err(ParseError::UnexpectedToken {
+        Some(kind) => Err(AstError::UnexpectedToken {
             expected: "expression".to_string(),
             found: kind,
             src: p.src.to_string(),
@@ -3582,7 +3580,7 @@ fn is_cast_follower(kind: Option<TokenKind>) -> bool {
     )
 }
 
-fn parse_lambda<'de>(p: &mut Parser<'de>) -> Result<Expr<'de>, ParseError> {
+fn parse_lambda<'de>(p: &mut Parser<'de>) -> Result<Expr<'de>, AstError> {
     p.expect(TokenKind::LeftBracket)?;
     let mut captures = Vec::new();
     while p.peek_kind() != Some(TokenKind::RightBracket) && !p.is_empty() {
@@ -3624,7 +3622,7 @@ fn parse_lambda<'de>(p: &mut Parser<'de>) -> Result<Expr<'de>, ParseError> {
     }))
 }
 
-fn parse_lambda_capture<'de>(p: &mut Parser<'de>) -> Result<LambdaCapture<'de>, ParseError> {
+fn parse_lambda_capture<'de>(p: &mut Parser<'de>) -> Result<LambdaCapture<'de>, AstError> {
     match p.peek_kind() {
         // Default copy capture: =
         Some(TokenKind::Equal) => {

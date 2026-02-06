@@ -14,7 +14,7 @@ pub mod stmt;
 pub mod ty;
 pub mod visit;
 
-pub use error::ParseError;
+pub use error::AstError;
 pub use expr::Expr;
 pub use item::*;
 pub use stmt::{Block, Stmt};
@@ -38,7 +38,7 @@ pub struct File<'de> {
 /// # Errors
 ///
 /// Returns a `ParseError` if the source code contains syntax errors.
-pub fn parse_file<'de>(content: &'de str) -> Result<File<'de>, ParseError> {
+pub fn parse_file<'de>(content: &'de str) -> Result<File<'de>, AstError> {
     parse::parse_file(content)
 }
 
@@ -56,15 +56,13 @@ mod tests {
         assert!(!gtest_src.is_empty());
 
         let parsed_file = parse_file(&gtest_src).unwrap();
-        assert!(
-            !parsed_file.items.is_empty()
-        );
+        assert!(!parsed_file.items.is_empty());
     }
 
     /// Test the ast parser with a simple main function that includes a switch statement and a fallthrough attribute
     #[tokio::test]
     async fn main_ast() {
-            let main = r#"
+        let main = r#"
             #include <iostream>
 
             #define ArgText(x) \
@@ -89,8 +87,6 @@ mod tests {
         "#;
 
         let main_file = parse_file(main).unwrap();
-        assert!(
-            !main_file.items.is_empty()
-        );
+        assert!(!main_file.items.is_empty());
     }
 }

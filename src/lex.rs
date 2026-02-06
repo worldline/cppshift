@@ -3,33 +3,32 @@
 
 use std::{fmt, iter::Peekable, str::CharIndices};
 
-use miette::{Diagnostic, Error};
+use miette::Diagnostic;
 use thiserror::Error;
 
 use crate::SourceSpan;
 
-#[derive(Diagnostic, Debug, Error)]
-#[error("Unexpected token '{token}'")]
-pub struct SingleTokenError {
-    #[source_code]
-    src: String,
-
-    pub token: char,
-
-    #[label = "this input character"]
-    err_span: miette::SourceSpan,
-}
-
-#[derive(Diagnostic, Debug, Error)]
-#[error("Wrong token separator `{separator}`")]
-pub struct TokenSeparatorError {
-    #[source_code]
-    src: String,
-
-    pub separator: char,
-
-    #[label = "this input separator"]
-    err_span: miette::SourceSpan,
+/// Errors that can occur during lexing
+#[derive(Clone, Diagnostic, Debug, Error)]
+pub enum LexError {
+    /// Unexpected token
+    #[error("Unexpected token '{token}'")]
+    SingleTokenError {
+        #[source_code]
+        src: String,
+        token: char,
+        #[label = "this input character"]
+        err_span: miette::SourceSpan,
+    },
+    /// Wrong token separator
+    #[error("Wrong token separator `{separator}`")]
+    TokenSeparatorError {
+        #[source_code]
+        src: String,
+        separator: char,
+        #[label = "this input separator"]
+        err_span: miette::SourceSpan,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -250,160 +249,6 @@ pub enum TokenKind {
     KeywordWhile,
 }
 
-impl fmt::Display for TokenKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            TokenKind::Ident => write!(f, "identifier"),
-            TokenKind::Number => write!(f, "number"),
-            TokenKind::String => write!(f, "string"),
-            TokenKind::Char => write!(f, "char"),
-            TokenKind::Comment => write!(f, "comment"),
-            TokenKind::Dot => write!(f, "."),
-            TokenKind::Ellipsis => write!(f, "..."),
-            TokenKind::Semicolon => write!(f, ";"),
-            TokenKind::Comma => write!(f, ","),
-            TokenKind::Colon => write!(f, ":"),
-            TokenKind::DoubleColon => write!(f, "::"),
-            TokenKind::Equal => write!(f, "="),
-            TokenKind::Star => write!(f, "*"),
-            TokenKind::LeftParenthese => write!(f, "("),
-            TokenKind::RightParenthese => write!(f, ")"),
-            TokenKind::LeftBracket => write!(f, "["),
-            TokenKind::RightBracket => write!(f, "]"),
-            TokenKind::DoubleLeftBracket => write!(f, "[["),
-            TokenKind::DoubleRightBracket => write!(f, "]]"),
-            TokenKind::LeftBrace => write!(f, "{{"),
-            TokenKind::RightBrace => write!(f, "}}"),
-            TokenKind::LeftChevron => write!(f, "<"),
-            TokenKind::RightChevron => write!(f, ">"),
-            TokenKind::NumberSign => write!(f, "#"),
-            TokenKind::DoubleNumberSign => write!(f, "##"),
-            TokenKind::And => write!(f, "&&"),
-            TokenKind::BitOr => write!(f, "|"),
-            TokenKind::Or => write!(f, "||"),
-            TokenKind::Xor => write!(f, "^"),
-            TokenKind::Compl => write!(f, "~"),
-            TokenKind::BitAnd => write!(f, "&"),
-            TokenKind::AndEq => write!(f, "&="),
-            TokenKind::OrEq => write!(f, "|="),
-            TokenKind::XorEq => write!(f, "^="),
-            TokenKind::Not => write!(f, "!"),
-            TokenKind::Ternary => write!(f, "?"),
-            TokenKind::Plus => write!(f, "+"),
-            TokenKind::Minus => write!(f, "-"),
-            TokenKind::Div => write!(f, "/"),
-            TokenKind::Modulo => write!(f, "%"),
-            TokenKind::Increment => write!(f, "++"),
-            TokenKind::Decrement => write!(f, "--"),
-            TokenKind::ShiftLeft => write!(f, "<<"),
-            TokenKind::ShiftRight => write!(f, ">>"),
-            TokenKind::CompoundAdd => write!(f, "+="),
-            TokenKind::CompoundSub => write!(f, "-="),
-            TokenKind::CompoundMult => write!(f, "*="),
-            TokenKind::CompoundDiv => write!(f, "/="),
-            TokenKind::CompoundModulo => write!(f, "%="),
-            TokenKind::CompoundShiftLeft => write!(f, "<<="),
-            TokenKind::CompoundShiftRight => write!(f, ">>="),
-            TokenKind::CompoundAnd => write!(f, "&="),
-            TokenKind::CompoundXor => write!(f, "^="),
-            TokenKind::CompoundOr => write!(f, "|="),
-            TokenKind::EqualTo => write!(f, "=="),
-            TokenKind::NotEqualTo => write!(f, "!="),
-            TokenKind::LessOrEqualTo => write!(f, "<="),
-            TokenKind::GreaterOrEqualTo => write!(f, ">="),
-            TokenKind::Compare => write!(f, "<=>"),
-            TokenKind::PointerMember => write!(f, "->"),
-            TokenKind::PointerObjMember => write!(f, ".*"),
-            TokenKind::PointerObjAccess => write!(f, "->*"),
-            TokenKind::KeywordAlignas => write!(f, "alignas"),
-            TokenKind::KeywordAlignof => write!(f, "alignof"),
-            TokenKind::KeywordAsm => write!(f, "asm"),
-            TokenKind::KeywordAuto => write!(f, "auto"),
-            TokenKind::KeywordBool => write!(f, "bool"),
-            TokenKind::KeywordBreak => write!(f, "break"),
-            TokenKind::KeywordCase => write!(f, "case"),
-            TokenKind::KeywordCatch => write!(f, "catch"),
-            TokenKind::KeywordChar => write!(f, "char"),
-            TokenKind::KeywordChar8 => write!(f, "char8_t"),
-            TokenKind::KeywordChar16 => write!(f, "char16_t"),
-            TokenKind::KeywordChar32 => write!(f, "char32_t"),
-            TokenKind::KeywordClass => write!(f, "class"),
-            TokenKind::KeywordConcept => write!(f, "concept"),
-            TokenKind::KeywordConst => write!(f, "const"),
-            TokenKind::KeywordConsteval => write!(f, "consteval"),
-            TokenKind::KeywordConstexpr => write!(f, "constexpr"),
-            TokenKind::KeywordConstinit => write!(f, "constinit"),
-            TokenKind::KeywordConstCast => write!(f, "const_cast"),
-            TokenKind::KeywordContinue => write!(f, "continue"),
-            TokenKind::KeywordCoAwait => write!(f, "co_await"),
-            TokenKind::KeywordCoReturn => write!(f, "co_return"),
-            TokenKind::KeywordCoYield => write!(f, "co_yield"),
-            TokenKind::KeywordDecltype => write!(f, "decltype"),
-            TokenKind::KeywordDefault => write!(f, "default"),
-            TokenKind::KeywordDelete => write!(f, "delete"),
-            TokenKind::KeywordDo => write!(f, "do"),
-            TokenKind::KeywordDouble => write!(f, "double"),
-            TokenKind::KeywordDynamicCast => write!(f, "dynamic_cast"),
-            TokenKind::KeywordElse => write!(f, "else"),
-            TokenKind::KeywordEnum => write!(f, "enum"),
-            TokenKind::KeywordExplicit => write!(f, "explicit"),
-            TokenKind::KeywordExport => write!(f, "export"),
-            TokenKind::KeywordExtern => write!(f, "extern"),
-            TokenKind::KeywordFalse => write!(f, "false"),
-            TokenKind::KeywordFinal => write!(f, "final"),
-            TokenKind::KeywordFloat => write!(f, "float"),
-            TokenKind::KeywordFor => write!(f, "for"),
-            TokenKind::KeywordFriend => write!(f, "friend"),
-            TokenKind::KeywordGoto => write!(f, "goto"),
-            TokenKind::KeywordIf => write!(f, "if"),
-            TokenKind::KeywordInline => write!(f, "inline"),
-            TokenKind::KeywordInt => write!(f, "int"),
-            TokenKind::KeywordImport => write!(f, "import"),
-            TokenKind::KeywordLong => write!(f, "long"),
-            TokenKind::KeywordModule => write!(f, "module"),
-            TokenKind::KeywordMutable => write!(f, "mutable"),
-            TokenKind::KeywordNamespace => write!(f, "namespace"),
-            TokenKind::KeywordNew => write!(f, "new"),
-            TokenKind::KeywordNoexcept => write!(f, "noexcept"),
-            TokenKind::KeywordNullptr => write!(f, "nullptr"),
-            TokenKind::KeywordOperator => write!(f, "operator"),
-            TokenKind::KeywordOverride => write!(f, "override"),
-            TokenKind::KeywordPrivate => write!(f, "private"),
-            TokenKind::KeywordProtected => write!(f, "protected"),
-            TokenKind::KeywordPublic => write!(f, "public"),
-            TokenKind::KeywordRegister => write!(f, "register"),
-            TokenKind::KeywordReinterpretCast => write!(f, "reinterpret_cast"),
-            TokenKind::KeywordRequires => write!(f, "requires"),
-            TokenKind::KeywordReturn => write!(f, "return"),
-            TokenKind::KeywordShort => write!(f, "short"),
-            TokenKind::KeywordSigned => write!(f, "signed"),
-            TokenKind::KeywordSizeof => write!(f, "sizeof"),
-            TokenKind::KeywordStatic => write!(f, "static"),
-            TokenKind::KeywordStaticAssert => write!(f, "static_assert"),
-            TokenKind::KeywordStaticCast => write!(f, "static_cast"),
-            TokenKind::KeywordStruct => write!(f, "struct"),
-            TokenKind::KeywordSwitch => write!(f, "switch"),
-            TokenKind::KeywordTemplate => write!(f, "template"),
-            TokenKind::KeywordThis => write!(f, "this"),
-            TokenKind::KeywordThreadLocal => write!(f, "thread_local"),
-            TokenKind::KeywordThrow => write!(f, "throw"),
-            TokenKind::KeywordTrue => write!(f, "true"),
-            TokenKind::KeywordTry => write!(f, "try"),
-            TokenKind::KeywordTypedef => write!(f, "typedef"),
-            TokenKind::KeywordTypeid => write!(f, "typeid"),
-            TokenKind::KeywordTypename => write!(f, "typename"),
-            TokenKind::KeywordUnion => write!(f, "union"),
-            TokenKind::KeywordUnsigned => write!(f, "unsigned"),
-            TokenKind::KeywordUsing => write!(f, "using"),
-            TokenKind::KeywordVirtual => write!(f, "virtual"),
-            TokenKind::KeywordVoid => write!(f, "void"),
-            TokenKind::KeywordVolatile => write!(f, "volatile"),
-            TokenKind::KeywordWchar => write!(f, "wchar_t"),
-            TokenKind::KeywordWhile => write!(f, "while"),
-        }
-    }
-}
-
 /// Token from [`Lexer`] parsing
 /// Its lifetime is bound to the source code
 ///
@@ -582,6 +427,7 @@ impl<'de> fmt::Debug for Token<'de> {
 ///     );
 /// }
 /// ```
+#[derive(Clone)]
 pub struct Lexer<'de> {
     /// Source file content
     src: &'de str,
@@ -629,7 +475,7 @@ impl<'de> Lexer<'de> {
 }
 
 impl<'de> Iterator for Lexer<'de> {
-    type Item = Result<Token<'de>, Error>;
+    type Item = Result<Token<'de>, LexError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         while let Some((c_at, c)) = self.rest.next() {
@@ -881,12 +727,11 @@ impl<'de> Iterator for Lexer<'de> {
                                     return new_token!(self, c_at, 3, TokenKind::Ellipsis);
                                 } else {
                                     // C++ can't contain two dots in a row.
-                                    return Some(Err(SingleTokenError {
+                                    return Some(Err(LexError::SingleTokenError {
                                         src: self.src.to_string(),
                                         token: '.',
                                         err_span: SourceSpan::new(self.src, c_at, 2).into(),
-                                    }
-                                    .into()));
+                                    }));
                                 }
                             }
                             _ => {
@@ -1101,36 +946,33 @@ impl<'de> Iterator for Lexer<'de> {
                             if let Some((_, '\'')) = self.rest.next() {
                                 return new_token!(src_span, TokenKind::Char);
                             } else {
-                                return Some(Err(TokenSeparatorError {
+                                return Some(Err(LexError::TokenSeparatorError {
                                     src: self.src.to_string(),
                                     separator: '\'',
                                     err_span: src_span.into(),
-                                }
-                                .into()));
+                                }));
                             }
                         } else {
                             let src_span = SourceSpan::new(self.src, c_at, 4);
                             if let Some((_, '\'')) = self.rest.next() {
                                 return new_token!(src_span, TokenKind::Char);
                             } else {
-                                return Some(Err(TokenSeparatorError {
+                                return Some(Err(LexError::TokenSeparatorError {
                                     src: self.src.to_string(),
                                     separator: '\'',
                                     err_span: src_span.into(),
-                                }
-                                .into()));
+                                }));
                             }
                         }
                     }
                 }
                 c if c.is_whitespace() => continue,
                 c => {
-                    return Some(Err(SingleTokenError {
+                    return Some(Err(LexError::SingleTokenError {
                         src: self.src.to_string(),
                         token: c,
                         err_span: miette::SourceSpan::from(c_at..c_at + 1),
-                    }
-                    .into()));
+                    }));
                 }
             }
         }
