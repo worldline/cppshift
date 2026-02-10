@@ -14,41 +14,51 @@ use super::stmt::*;
 use super::ty::*;
 
 // ---------------------------------------------------------------------------
-// Parser — internal cursor over tokens
+// Parser — thin wrapper around a cloneable Lexer
 // ---------------------------------------------------------------------------
 
 pub(super) struct Parser<'de> {
     src: &'de str,
-    tokens: Vec<Token<'de>>,
-    cursor: usize,
+    lexer: Lexer<'de>,
+    /// The most recently consumed token (for span tracking)
+    last_token: Option<Token<'de>>,
+}
+
+/// Advance a lexer clone, skipping comments, returning the next token.
+fn next_non_comment<'de>(lexer: &mut Lexer<'de>) -> Option<Token<'de>> {
+    loop {
+        match lexer.next()? {
+            Ok(tok) if tok.kind() == TokenKind::Comment => continue,
+            Ok(tok) => return Some(tok),
+            Err(_) => return None,
+        }
+    }
 }
 
 impl<'de> Parser<'de> {
     pub fn new(src: &'de str) -> Result<Self, AstError> {
-        let mut tokens = Vec::new();
-        for result in Lexer::new(src) {
-            let token = result?;
-            if token.kind() != TokenKind::Comment {
-                tokens.push(token);
-            }
-        }
         Ok(Parser {
             src,
-            tokens,
-            cursor: 0,
+            lexer: Lexer::new(src),
+            last_token: None,
         })
     }
 
-    fn peek(&self) -> Option<&Token<'de>> {
-        self.tokens.get(self.cursor)
+    fn peek(&self) -> Option<Token<'de>> {
+        let mut clone = self.lexer.clone();
+        next_non_comment(&mut clone)
     }
 
     fn peek_kind(&self) -> Option<TokenKind> {
         self.peek().map(|t| t.kind())
     }
 
-    fn peek_nth(&self, n: usize) -> Option<&Token<'de>> {
-        self.tokens.get(self.cursor + n)
+    fn peek_nth(&self, n: usize) -> Option<Token<'de>> {
+        let mut clone = self.lexer.clone();
+        for _ in 0..n {
+            next_non_comment(&mut clone)?;
+        }
+        next_non_comment(&mut clone)
     }
 
     fn peek_nth_kind(&self, n: usize) -> Option<TokenKind> {
@@ -56,12 +66,16 @@ impl<'de> Parser<'de> {
     }
 
     fn bump(&mut self) -> Result<Token<'de>, AstError> {
-        if self.cursor < self.tokens.len() {
-            let token = self.tokens[self.cursor];
-            self.cursor += 1;
-            Ok(token)
-        } else {
-            Err(self.eof_error("token"))
+        loop {
+            match self.lexer.next() {
+                Some(Ok(tok)) if tok.kind() == TokenKind::Comment => continue,
+                Some(Ok(tok)) => {
+                    self.last_token = Some(tok);
+                    return Ok(tok);
+                }
+                Some(Err(e)) => return Err(e.into()),
+                None => return Err(self.eof_error("token")),
+            }
         }
     }
 
@@ -87,33 +101,44 @@ impl<'de> Parser<'de> {
     }
 
     fn is_empty(&self) -> bool {
-        self.cursor >= self.tokens.len()
+        self.peek().is_none()
     }
 
-    fn checkpoint(&self) -> usize {
-        self.cursor
+    /// Clone the lexer for backtracking.
+    fn checkpoint(&self) -> Lexer<'de> {
+        self.lexer.clone()
     }
 
-    fn restore(&mut self, checkpoint: usize) {
-        self.cursor = checkpoint;
+    /// Restore the lexer from a previously saved clone.
+    fn restore(&mut self, saved: &Lexer<'de>) {
+        self.lexer = saved.clone();
     }
 
-    fn span_since(&self, start: usize) -> SourceSpan<'de> {
-        if start >= self.tokens.len() {
-            return SourceSpan::new(self.src, self.src.len(), 0);
-        }
-        let start_span = self.tokens[start].src_span();
+    /// Compute a span from `start` (captured via `peek()` before parsing)
+    /// through the most recently consumed token.
+    fn span_since(&self, start: Option<Token<'de>>) -> SourceSpan<'de> {
+        let start_span = match start {
+            Some(tok) => tok.src_span(),
+            None => return SourceSpan::new(self.src, self.src.len(), 0),
+        };
         let start_range: core::ops::Range<usize> = start_span.into();
-        if self.cursor == 0 || self.cursor > self.tokens.len() {
-            return start_span;
-        }
-        let end_span = self.tokens[self.cursor.min(self.tokens.len()) - 1].src_span();
+        let end_span = match self.last_token {
+            Some(tok) => tok.src_span(),
+            None => return start_span,
+        };
         let end_range: core::ops::Range<usize> = end_span.into();
         SourceSpan::new(
             self.src,
             start_range.start,
             end_range.end - start_range.start,
         )
+    }
+
+    /// Get the span of the most recently consumed token.
+    fn last_span(&self) -> SourceSpan<'de> {
+        self.last_token
+            .map(|t| t.src_span())
+            .unwrap_or_else(|| SourceSpan::new(self.src, self.src.len(), 0))
     }
 
     fn eof_error(&self, expected: &str) -> AstError {
@@ -167,7 +192,7 @@ fn parse_attributes<'de>(p: &mut Parser<'de>) -> Result<Vec<Attribute<'de>>, Ast
 }
 
 fn parse_attribute<'de>(p: &mut Parser<'de>) -> Result<Attribute<'de>, AstError> {
-    let cp = p.checkpoint();
+    let start = p.peek();
     p.expect(TokenKind::DoubleLeftBracket)?;
 
     // Parse attribute path (e.g., nodiscard, gnu::always_inline)
@@ -200,7 +225,7 @@ fn parse_attribute<'de>(p: &mut Parser<'de>) -> Result<Attribute<'de>, AstError>
     }
 
     p.expect(TokenKind::DoubleRightBracket)?;
-    let span = p.span_since(cp);
+    let span = p.span_since(start);
     Ok(Attribute { span, path, args })
 }
 
@@ -311,7 +336,7 @@ fn set_item_attrs<'de>(mut item: Item<'de>, attrs: Vec<Attribute<'de>>) -> Item<
 // ---------------------------------------------------------------------------
 
 fn parse_item_macro<'de>(p: &mut Parser<'de>) -> Result<ItemMacro<'de>, AstError> {
-    let cp = p.checkpoint();
+    let start = p.peek();
     let hash_tok = p.expect(TokenKind::NumberSign)?;
     let mut tokens = Vec::new();
 
@@ -358,7 +383,7 @@ fn parse_item_macro<'de>(p: &mut Parser<'de>) -> Result<ItemMacro<'de>, AstError
         tokens.push(p.bump()?);
     }
 
-    let span = p.span_since(cp);
+    let span = p.span_since(start);
     Ok(ItemMacro { span, tokens })
 }
 
@@ -1131,7 +1156,6 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
     let ident = if p.peek_kind() == Some(TokenKind::KeywordOperator) {
         // operator overload: use span from 'operator' keyword through operator token
         let op_tok = p.bump()?;
-        let _cp = p.cursor;
         // Parse the operator symbol(s)
         match p.peek_kind() {
             Some(TokenKind::LeftParenthese) => {
@@ -1157,28 +1181,12 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
                 p.bump()?;
             }
         }
-        let span = SourceSpan::new(
-            p.src,
-            {
-                let r: core::ops::Range<usize> = op_tok.src_span().into();
-                r.start
-            },
-            {
-                let end_span = p.tokens[p.cursor.min(p.tokens.len()) - 1].src_span();
-                let end_r: core::ops::Range<usize> = end_span.into();
-                let start_r: core::ops::Range<usize> = op_tok.src_span().into();
-                end_r.end - start_r.start
-            },
-        );
+        let end_span = p.last_span();
+        let start_r: core::ops::Range<usize> = op_tok.src_span().into();
+        let end_r: core::ops::Range<usize> = end_span.into();
+        let span = SourceSpan::new(p.src, start_r.start, end_r.end - start_r.start);
         Ident {
-            sym: &p.src[{
-                let r: core::ops::Range<usize> = op_tok.src_span().into();
-                r.start
-            }..{
-                let end_span = p.tokens[p.cursor.min(p.tokens.len()) - 1].src_span();
-                let end_r: core::ops::Range<usize> = end_span.into();
-                end_r.end
-            }],
+            sym: &p.src[start_r.start..end_r.end],
             span,
         }
     } else {
@@ -1242,7 +1250,7 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
                             p.bump()?;
                         } // single-token operator
                     }
-                    let end_span = p.tokens[p.cursor.min(p.tokens.len()) - 1].src_span();
+                    let end_span = p.last_span();
                     let start_r: core::ops::Range<usize> = op_start.src_span().into();
                     let end_r: core::ops::Range<usize> = end_span.into();
                     last = Ident {
@@ -1497,6 +1505,7 @@ fn parse_fn_params<'de>(p: &mut Parser<'de>) -> Result<Punctuated<'de, FnArg<'de
             break;
         }
 
+        let start = p.peek();
         let cp = p.checkpoint();
         match parse_fn_param(p) {
             Ok((arg, has_comma)) => {
@@ -1510,7 +1519,7 @@ fn parse_fn_params<'de>(p: &mut Parser<'de>) -> Result<Punctuated<'de, FnArg<'de
             Err(_) => {
                 // Recovery: skip to next comma or close paren (for complex types like
                 // pointer-to-member functions: int (Class::*method)() const)
-                p.restore(cp);
+                p.restore(&cp);
                 let mut depth = 0u32;
                 loop {
                     match p.peek_kind() {
@@ -1526,7 +1535,7 @@ fn parse_fn_params<'de>(p: &mut Parser<'de>) -> Result<Punctuated<'de, FnArg<'de
                         Some(TokenKind::RightParenthese) => break,
                         Some(TokenKind::Comma) if depth == 0 => {
                             let comma = p.bump()?;
-                            let span = p.span_since(cp);
+                            let span = p.span_since(start);
                             let arg = FnArg {
                                 attrs: Vec::new(),
                                 ty: Type::Path(TypePath {
@@ -1553,7 +1562,7 @@ fn parse_fn_params<'de>(p: &mut Parser<'de>) -> Result<Punctuated<'de, FnArg<'de
                 }
                 if p.peek_kind() == Some(TokenKind::RightParenthese) && depth == 0 {
                     // End of params with recovery
-                    let span = p.span_since(cp);
+                    let span = p.span_since(start);
                     let span_range: core::ops::Range<usize> = span.into();
                     if !span_range.is_empty() {
                         params.push_value(FnArg {
@@ -2056,7 +2065,7 @@ fn parse_stmt<'de>(p: &mut Parser<'de>) -> Result<Stmt<'de>, AstError> {
                     }));
                 }
             }
-            p.restore(cp);
+            p.restore(&cp);
         }
 
         // Regular for: try local variable init
@@ -2066,7 +2075,7 @@ fn parse_stmt<'de>(p: &mut Parser<'de>) -> Result<Stmt<'de>, AstError> {
                 // StmtLocal already consumed the semicolon
                 Some(Box::new(Stmt::Local(local)))
             } else {
-                p.restore(cp2);
+                p.restore(&cp2);
                 let expr = parse_expr(p)?;
                 Some(Box::new(Stmt::Expr(StmtExpr { expr })))
             }
@@ -2126,14 +2135,14 @@ fn parse_stmt<'de>(p: &mut Parser<'de>) -> Result<Stmt<'de>, AstError> {
 
     // Break
     if p.eat(TokenKind::KeywordBreak).is_some() {
-        let span = p.span_since(p.cursor - 1);
+        let span = p.last_span();
         p.expect(TokenKind::Semicolon)?;
         return Ok(Stmt::Break(StmtBreak { span }));
     }
 
     // Continue
     if p.eat(TokenKind::KeywordContinue).is_some() {
-        let span = p.span_since(p.cursor - 1);
+        let span = p.last_span();
         p.expect(TokenKind::Semicolon)?;
         return Ok(Stmt::Continue(StmtContinue { span }));
     }
@@ -2186,7 +2195,7 @@ fn parse_stmt<'de>(p: &mut Parser<'de>) -> Result<Stmt<'de>, AstError> {
     if let Some(local) = try_parse_local(p) {
         return Ok(Stmt::Local(local));
     }
-    p.restore(cp);
+    p.restore(&cp);
 
     // Expression statement
     let cp = p.checkpoint();
@@ -2231,7 +2240,7 @@ fn parse_stmt<'de>(p: &mut Parser<'de>) -> Result<Stmt<'de>, AstError> {
         }
         Err(_) => {
             // Recovery: skip to next semicolon or closing brace
-            p.restore(cp);
+            p.restore(&cp);
             let mut depth = 0u32;
             loop {
                 match p.peek_kind() {
@@ -2262,9 +2271,9 @@ fn parse_stmt<'de>(p: &mut Parser<'de>) -> Result<Stmt<'de>, AstError> {
 /// Check if there is a semicolon before the matching close parenthesis at depth 1.
 fn has_semicolon_before_close_paren(p: &Parser) -> bool {
     let mut depth = 1u32;
-    let mut i = p.cursor;
-    while i < p.tokens.len() && depth > 0 {
-        match p.tokens[i].kind() {
+    let mut lexer = p.lexer.clone();
+    while let Some(tok) = next_non_comment(&mut lexer) {
+        match tok.kind() {
             TokenKind::LeftParenthese => depth += 1,
             TokenKind::RightParenthese => {
                 depth -= 1;
@@ -2275,7 +2284,6 @@ fn has_semicolon_before_close_paren(p: &Parser) -> bool {
             TokenKind::Semicolon if depth == 1 => return true,
             _ => {}
         }
-        i += 1;
     }
     false
 }
@@ -2288,7 +2296,7 @@ fn try_parse_local<'de>(p: &mut Parser<'de>) -> Option<StmtLocal<'de>> {
 
     // After type, we need an identifier
     if p.peek_kind() != Some(TokenKind::Ident) {
-        p.restore(cp);
+        p.restore(&cp);
         return None;
     }
     let ident = parse_ident(p).ok()?;
@@ -2335,7 +2343,7 @@ fn try_parse_local<'de>(p: &mut Parser<'de>) -> Option<StmtLocal<'de>> {
             (arr_ty, arr_init)
         }
         _ => {
-            p.restore(cp);
+            p.restore(&cp);
             return None;
         }
     };
@@ -2602,7 +2610,7 @@ fn try_parse_template_inst<'de>(
                 args: args.args,
             }));
         }
-        p.restore(cp);
+        p.restore(&cp);
     }
     Ok(Type::Path(TypePath { path }))
 }
@@ -2630,13 +2638,13 @@ fn parse_angle_bracketed_args<'de>(
                 }
                 _ => {
                     // Not a type arg, try as expression
-                    p.restore(cp);
+                    p.restore(&cp);
                     let expr = parse_expr_no_comma(p)?;
                     args.push(TemplateArg::Expr(expr));
                 }
             }
         } else {
-            p.restore(cp);
+            p.restore(&cp);
             let expr = parse_expr_no_comma(p)?;
             args.push(TemplateArg::Expr(expr));
         }
@@ -2663,7 +2671,7 @@ fn parse_angle_bracketed_args<'de>(
 }
 
 fn parse_integer_type<'de>(p: &mut Parser<'de>) -> Result<Type<'de>, AstError> {
-    let cp = p.checkpoint();
+    let start = p.peek();
     let mut _has_signed = false;
     let mut has_unsigned = false;
     let mut has_short = false;
@@ -2700,14 +2708,14 @@ fn parse_integer_type<'de>(p: &mut Parser<'de>) -> Result<Type<'de>, AstError> {
                     FundamentalKind::SignedChar
                 };
                 return Ok(Type::Fundamental(TypeFundamental {
-                    span: p.span_since(cp),
+                    span: p.span_since(start),
                     kind,
                 }));
             }
             Some(TokenKind::KeywordDouble) if long_count > 0 => {
                 let _tok = p.bump()?;
                 return Ok(Type::Fundamental(TypeFundamental {
-                    span: p.span_since(cp),
+                    span: p.span_since(start),
                     kind: FundamentalKind::LongDouble,
                 }));
             }
@@ -2732,7 +2740,7 @@ fn parse_integer_type<'de>(p: &mut Parser<'de>) -> Result<Type<'de>, AstError> {
         FundamentalKind::Int
     };
 
-    let span = p.span_since(cp);
+    let span = p.span_since(start);
     Ok(Type::Fundamental(TypeFundamental { span, kind }))
 }
 
@@ -3151,7 +3159,7 @@ fn parse_new_expr<'de>(p: &mut Parser<'de>, global: bool) -> Result<Expr<'de>, A
         p.bump()?;
         // If what follows looks like a type, this is not placement
         if is_type_start(p.peek_kind()) {
-            p.restore(cp);
+            p.restore(&cp);
             None
         } else {
             let mut args = Punctuated::new();
@@ -3336,6 +3344,7 @@ fn parse_expr_primary<'de>(p: &mut Parser<'de>) -> Result<Expr<'de>, AstError> {
             p.bump()?;
             let operand = if p.peek_kind() == Some(TokenKind::LeftParenthese) {
                 p.bump()?;
+                let start_sizeof = p.peek();
                 let cp = p.checkpoint();
                 if is_type_start(p.peek_kind()) {
                     if let Ok(_ty) = parse_type(p)
@@ -3343,12 +3352,12 @@ fn parse_expr_primary<'de>(p: &mut Parser<'de>) -> Result<Expr<'de>, AstError> {
                     {
                         return Ok(Expr::Sizeof(ExprSizeof {
                             operand: Box::new(Expr::Lit(ExprLit {
-                                span: p.span_since(cp),
+                                span: p.span_since(start_sizeof),
                                 kind: LitKind::Integer,
                             })),
                         }));
                     }
-                    p.restore(cp);
+                    p.restore(&cp);
                 }
                 let inner = parse_expr(p)?;
                 p.expect(TokenKind::RightParenthese)?;
@@ -3382,7 +3391,7 @@ fn parse_expr_primary<'de>(p: &mut Parser<'de>) -> Result<Expr<'de>, AstError> {
                         operand: TypeidOperand::Type(Box::new(ty)),
                     }));
                 }
-                p.restore(cp);
+                p.restore(&cp);
             }
             let expr = parse_expr(p)?;
             p.expect(TokenKind::RightParenthese)?;
@@ -3436,7 +3445,7 @@ fn parse_expr_primary<'de>(p: &mut Parser<'de>) -> Result<Expr<'de>, AstError> {
                         }));
                     }
                 }
-                p.restore(cp);
+                p.restore(&cp);
                 p.bump()?; // re-consume (
             }
             let inner = parse_expr(p)?;
@@ -3530,7 +3539,7 @@ fn parse_expr_primary<'de>(p: &mut Parser<'de>) -> Result<Expr<'de>, AstError> {
                         return Ok(Expr::Path(ExprPath { path }));
                     }
                 }
-                p.restore(cp);
+                p.restore(&cp);
             }
             if path.segments.len() == 1 && !path.leading_colon {
                 Ok(Expr::Ident(ExprIdent {
