@@ -940,29 +940,69 @@ impl<'de> Iterator for Lexer<'de> {
                 }
                 '\'' => {
                     if let Some((_, c)) = self.rest.next() {
-                        if c == '\\' {
-                            self.rest.next();
-                            let src_span = SourceSpan::new(self.src, c_at, 4);
-                            if let Some((_, '\'')) = self.rest.next() {
-                                return new_token!(src_span, TokenKind::Char);
-                            } else {
-                                return Some(Err(LexError::TokenSeparatorError {
-                                    src: self.src.to_string(),
-                                    separator: '\'',
-                                    err_span: src_span.into(),
-                                }));
+                        if c == '\\' 
+                            && let Some((_, esc)) = self.rest.next()
+                        {
+                            // For hex (\xNN), octal (\0nn), and unicode (\uNNNN, \UNNNNNNNN)
+                            // escapes, consume remaining digits of the sequence
+                            match esc {
+                                'x' => {
+                                    while self
+                                        .rest
+                                        .peek()
+                                        .is_some_and(|(_, ch)| ch.is_ascii_hexdigit())
+                                    {
+                                        self.rest.next();
+                                    }
+                                }
+                                '0'..='7' => {
+                                    for _ in 0..2 {
+                                        if self
+                                            .rest
+                                            .peek()
+                                            .is_some_and(|(_, ch)| matches!(ch, '0'..='7'))
+                                        {
+                                            self.rest.next();
+                                        } else {
+                                            break;
+                                        }
+                                    }
+                                }
+                                'u' => {
+                                    for _ in 0..4 {
+                                        if self
+                                            .rest
+                                            .peek()
+                                            .is_some_and(|(_, ch)| ch.is_ascii_hexdigit())
+                                        {
+                                            self.rest.next();
+                                        }
+                                    }
+                                }
+                                'U' => {
+                                    for _ in 0..8 {
+                                        if self
+                                            .rest
+                                            .peek()
+                                            .is_some_and(|(_, ch)| ch.is_ascii_hexdigit())
+                                        {
+                                            self.rest.next();
+                                        }
+                                    }
+                                }
+                                // Simple escapes (\n, \t, \\, \', \", etc.)
+                                _ => {}
                             }
+                        }
+
+                        if let Some((offset, '\'')) = self.rest.next() {
+                            return new_token!(self, c_at, offset + 1 - c_at, TokenKind::Char);
                         } else {
-                            let src_span = SourceSpan::new(self.src, c_at, 4);
-                            if let Some((_, '\'')) = self.rest.next() {
-                                return new_token!(src_span, TokenKind::Char);
-                            } else {
-                                return Some(Err(LexError::TokenSeparatorError {
-                                    src: self.src.to_string(),
-                                    separator: '\'',
-                                    err_span: src_span.into(),
-                                }));
-                            }
+                            return Some(Err(LexError::TokenSeparatorError {
+                                src: self.src.to_string(),
+                                separator: '\'',
+                                err_span: miette::SourceSpan::from(c_at..c_at + 1),
+                            }));
                         }
                     }
                 }
