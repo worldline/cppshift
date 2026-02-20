@@ -940,7 +940,7 @@ impl<'de> Iterator for Lexer<'de> {
                 }
                 '\'' => {
                     if let Some((_, c)) = self.rest.next() {
-                        if c == '\\' 
+                        if c == '\\'
                             && let Some((_, esc)) = self.rest.next()
                         {
                             // For hex (\xNN), octal (\0nn), and unicode (\uNNNN, \UNNNNNNNN)

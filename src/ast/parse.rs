@@ -239,6 +239,12 @@ fn parse_item<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError> {
         return parse_item_macro(p).map(Item::Macro);
     }
 
+    // Empty declaration (stray semicolons, e.g., after namespace or class body)
+    if p.peek_kind() == Some(TokenKind::Semicolon) {
+        p.bump()?;
+        return Ok(Item::Verbatim(ItemVerbatim { tokens: Vec::new() }));
+    }
+
     // Parse leading attributes [[...]]
     let attrs = parse_attributes(p)?;
 
@@ -788,6 +794,28 @@ fn parse_item_foreign_mod<'de>(p: &mut Parser<'de>) -> Result<ItemForeignMod<'de
 // Function or variable declaration (the ambiguous case)
 // ---------------------------------------------------------------------------
 
+/// Check if const/volatile is followed by another specifier (e.g., `const static int`).
+/// This distinguishes `const static int x` (const as leading specifier) from `const int x`
+/// (const as type qualifier).
+fn is_specifier_after_cv(p: &Parser<'_>) -> bool {
+    matches!(
+        p.peek_nth_kind(1),
+        Some(
+            TokenKind::KeywordStatic
+                | TokenKind::KeywordInline
+                | TokenKind::KeywordExtern
+                | TokenKind::KeywordVirtual
+                | TokenKind::KeywordConstexpr
+                | TokenKind::KeywordConsteval
+                | TokenKind::KeywordConstinit
+                | TokenKind::KeywordThreadLocal
+                | TokenKind::KeywordMutable
+                | TokenKind::KeywordExplicit
+                | TokenKind::KeywordRegister
+        )
+    )
+}
+
 fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError> {
     // Parse leading specifiers
     let mut constexpr_token = false;
@@ -797,6 +825,8 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
     let mut static_token = false;
     let mut explicit_token = false;
     let mut _extern_token = false;
+    let mut leading_const = false;
+    let mut leading_volatile = false;
 
     loop {
         match p.peek_kind() {
@@ -844,6 +874,15 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
             Some(TokenKind::KeywordFriend) => {
                 // friend declaration — skip for now, parse inner item
                 p.bump()?;
+            }
+            // Handle const/volatile appearing before other specifiers (e.g., const static int)
+            Some(TokenKind::KeywordConst) if is_specifier_after_cv(p) => {
+                p.bump()?;
+                leading_const = true;
+            }
+            Some(TokenKind::KeywordVolatile) if is_specifier_after_cv(p) => {
+                p.bump()?;
+                leading_volatile = true;
             }
             _ => break,
         }
@@ -915,6 +954,17 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
 
     // Parse return type
     let mut return_type = parse_type(p)?;
+
+    // Re-apply const/volatile that were consumed as leading specifiers
+    if leading_const || leading_volatile {
+        return_type = Type::Qualified(TypeQualified {
+            cv: CvQualifiers {
+                const_token: leading_const,
+                volatile_token: leading_volatile,
+            },
+            ty: Box::new(return_type),
+        });
+    }
 
     // Function pointer declaration: return_type (*name)(params)
     if p.peek_kind() == Some(TokenKind::LeftParenthese)
@@ -1147,7 +1197,28 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
                 }
             }
         }
-        p.eat(TokenKind::Semicolon); // optional trailing semicolon
+        // Optional trailing block { ... } (e.g., MACRO_NAME(suite, name) { body })
+        if p.peek_kind() == Some(TokenKind::LeftBrace) {
+            p.bump()?;
+            let mut brace_depth = 1u32;
+            while brace_depth > 0 && !p.is_empty() {
+                match p.peek_kind() {
+                    Some(TokenKind::LeftBrace) => {
+                        brace_depth += 1;
+                        p.bump()?;
+                    }
+                    Some(TokenKind::RightBrace) => {
+                        brace_depth -= 1;
+                        p.bump()?;
+                    }
+                    _ => {
+                        p.bump()?;
+                    }
+                }
+            }
+        } else {
+            p.eat(TokenKind::Semicolon); // optional trailing semicolon
+        }
         return Ok(Item::Verbatim(ItemVerbatim { tokens: Vec::new() }));
     }
 
@@ -1423,9 +1494,19 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
     }
     let return_type = return_type_for_var;
 
-    // Variable declaration: type ident [= expr] [, ident2 [= expr2]]* ;
+    // Variable declaration: type ident [= expr | {init}] [, ident2 [= expr2]]* ;
     let expr = if p.eat(TokenKind::Equal).is_some() {
         Some(parse_expr_no_comma(p)?)
+    } else if p.peek_kind() == Some(TokenKind::LeftBrace) {
+        // Brace initialization: type ident{expr};
+        p.bump()?;
+        let init = if p.peek_kind() != Some(TokenKind::RightBrace) {
+            Some(parse_expr(p)?)
+        } else {
+            None
+        };
+        p.expect(TokenKind::RightBrace)?;
+        init
     } else {
         None
     };
@@ -1677,6 +1758,13 @@ fn parse_base_specifiers<'de>(p: &mut Parser<'de>) -> Result<Vec<BaseSpecifier<'
         }
 
         let path = parse_path(p)?;
+        // Skip template arguments on base class (e.g., Base<T, U>)
+        if p.peek_kind() == Some(TokenKind::LeftChevron) {
+            let cp = p.checkpoint();
+            if parse_angle_bracketed_args(p).is_err() {
+                p.restore(&cp);
+            }
+        }
         bases.push(BaseSpecifier {
             access,
             virtual_token,
@@ -2639,13 +2727,13 @@ fn parse_angle_bracketed_args<'de>(
                 _ => {
                     // Not a type arg, try as expression
                     p.restore(&cp);
-                    let expr = parse_expr_no_comma(p)?;
+                    let expr = parse_expr_no_angle(p)?;
                     args.push(TemplateArg::Expr(expr));
                 }
             }
         } else {
             p.restore(&cp);
-            let expr = parse_expr_no_comma(p)?;
+            let expr = parse_expr_no_angle(p)?;
             args.push(TemplateArg::Expr(expr));
         }
 
@@ -2847,14 +2935,23 @@ fn parse_ident<'de>(p: &mut Parser<'de>) -> Result<Ident<'de>, AstError> {
 // ---------------------------------------------------------------------------
 
 fn parse_expr<'de>(p: &mut Parser<'de>) -> Result<Expr<'de>, AstError> {
-    parse_expr_precedence(p, 0)
+    parse_expr_precedence(p, 0, false)
 }
 
 fn parse_expr_no_comma<'de>(p: &mut Parser<'de>) -> Result<Expr<'de>, AstError> {
-    parse_expr_precedence(p, 1)
+    parse_expr_precedence(p, 1, false)
 }
 
-fn parse_expr_precedence<'de>(p: &mut Parser<'de>, min_prec: u8) -> Result<Expr<'de>, AstError> {
+/// Parse an expression that stops at `>` and `>>` (used inside template argument lists).
+fn parse_expr_no_angle<'de>(p: &mut Parser<'de>) -> Result<Expr<'de>, AstError> {
+    parse_expr_precedence(p, 1, true)
+}
+
+fn parse_expr_precedence<'de>(
+    p: &mut Parser<'de>,
+    min_prec: u8,
+    stop_at_angle: bool,
+) -> Result<Expr<'de>, AstError> {
     let mut lhs = parse_expr_prefix(p)?;
 
     loop {
@@ -3018,9 +3115,9 @@ fn parse_expr_precedence<'de>(p: &mut Parser<'de>, min_prec: u8) -> Result<Expr<
         // Ternary
         if min_prec <= 1 && p.peek_kind() == Some(TokenKind::Ternary) {
             p.bump()?;
-            let then_expr = parse_expr_precedence(p, 0)?;
+            let then_expr = parse_expr_precedence(p, 0, stop_at_angle)?;
             p.expect(TokenKind::Colon)?;
-            let else_expr = parse_expr_precedence(p, 1)?;
+            let else_expr = parse_expr_precedence(p, 1, stop_at_angle)?;
             lhs = Expr::Conditional(ExprConditional {
                 condition: Box::new(lhs),
                 then_expr: Box::new(then_expr),
@@ -3033,13 +3130,25 @@ fn parse_expr_precedence<'de>(p: &mut Parser<'de>, min_prec: u8) -> Result<Expr<
         let Some(op) = peek_binary_op(p) else {
             break;
         };
+        // In template argument context, > and >> close the template, not compare
+        if stop_at_angle
+            && matches!(
+                op,
+                BinaryOp::Greater
+                    | BinaryOp::GreaterEqual
+                    | BinaryOp::ShiftRight
+                    | BinaryOp::ShiftRightAssign
+            )
+        {
+            break;
+        }
         let (prec, right_assoc) = binary_op_precedence(op);
         if prec < min_prec {
             break;
         }
         p.bump()?;
         let next_min = if right_assoc { prec } else { prec + 1 };
-        let rhs = parse_expr_precedence(p, next_min)?;
+        let rhs = parse_expr_precedence(p, next_min, stop_at_angle)?;
         lhs = Expr::Binary(ExprBinary {
             lhs: Box::new(lhs),
             op,
@@ -3263,10 +3372,18 @@ fn parse_expr_primary<'de>(p: &mut Parser<'de>) -> Result<Expr<'de>, AstError> {
             } else {
                 LitKind::Integer
             };
-            Ok(Expr::Lit(ExprLit {
-                span: tok.src_span(),
-                kind,
-            }))
+            let mut span = tok.src_span();
+            // User-defined literal suffix: 0_potato, 1.0_sec, etc.
+            if let Some(suffix) = p.peek() {
+                if suffix.kind() == TokenKind::Ident && suffix.src().starts_with('_') {
+                    let s = p.bump()?;
+                    let s_range: core::ops::Range<usize> = s.src_span().into();
+                    let start_range: core::ops::Range<usize> = span.into();
+                    span =
+                        SourceSpan::new(p.src, start_range.start, s_range.end - start_range.start);
+                }
+            }
+            Ok(Expr::Lit(ExprLit { span, kind }))
         }
         Some(TokenKind::String) => {
             let tok = p.bump()?;
