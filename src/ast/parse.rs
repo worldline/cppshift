@@ -236,6 +236,9 @@ fn parse_attribute<'de>(p: &mut Parser<'de>) -> Result<Attribute<'de>, AstError>
 fn parse_item<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError> {
     // Skip preprocessor directives (lines starting with #)
     if p.peek_kind() == Some(TokenKind::NumberSign) {
+        if p.peek_nth(1).is_some_and(|t| t.src_span().src() == "include") {
+            return parse_item_include(p).map(Item::Include);
+        }
         return parse_item_macro(p).map(Item::Macro);
     }
 
@@ -332,7 +335,7 @@ fn set_item_attrs<'de>(mut item: Item<'de>, attrs: Vec<Attribute<'de>>) -> Item<
         Item::Static(s) => s.attrs = attrs,
         Item::ForeignMod(f) => f.attrs = attrs,
         Item::Template(t) => t.attrs = attrs,
-        Item::StaticAssert(_) | Item::Macro(_) | Item::Verbatim(_) => {}
+        Item::StaticAssert(_) | Item::Include(_) | Item::Macro(_) | Item::Verbatim(_) => {}
     }
     item
 }
@@ -340,6 +343,32 @@ fn set_item_attrs<'de>(mut item: Item<'de>, attrs: Vec<Attribute<'de>>) -> Item<
 // ---------------------------------------------------------------------------
 // Preprocessor macro: # ... (until end of logical line)
 // ---------------------------------------------------------------------------
+
+fn parse_item_include<'de>(p: &mut Parser<'de>) -> Result<ItemInclude<'de>, AstError> {
+    let start = p.peek();
+    p.expect(TokenKind::NumberSign)?;
+    p.bump()?; // consume the "include" ident
+
+    let path = if p.peek_kind() == Some(TokenKind::LeftChevron) {
+        // System include: <...> — capture tokens inside angle brackets, excluding delimiters
+        p.expect(TokenKind::LeftChevron)?;
+        let path_start = p.peek();
+        while !p.is_empty() && p.peek_kind() != Some(TokenKind::RightChevron) {
+            p.bump()?;
+        }
+        let path_span = p.span_since(path_start);
+        p.expect(TokenKind::RightChevron)?;
+        IncludePath::System(path_span)
+    } else {
+        // Local include: "..." — strip surrounding quotes
+        let str_tok = p.bump()?;
+        let str_range: core::ops::Range<usize> = str_tok.src_span().into();
+        IncludePath::Local(SourceSpan::new(p.src, str_range.start + 1, str_range.len() - 2))
+    };
+
+    let span = p.span_since(start);
+    Ok(ItemInclude { span, path })
+}
 
 fn parse_item_macro<'de>(p: &mut Parser<'de>) -> Result<ItemMacro<'de>, AstError> {
     let start = p.peek();
@@ -2055,6 +2084,9 @@ fn parse_block<'de>(p: &mut Parser<'de>) -> Result<Block<'de>, AstError> {
 fn parse_stmt<'de>(p: &mut Parser<'de>) -> Result<Stmt<'de>, AstError> {
     // Skip preprocessor directives inside function bodies
     if p.peek_kind() == Some(TokenKind::NumberSign) {
+        if p.peek_nth(1).is_some_and(|t| t.src_span().src() == "include") {
+            return parse_item_include(p).map(|i| Stmt::Item(Item::Include(i)));
+        }
         let macro_item = parse_item_macro(p)?;
         return Ok(Stmt::Item(Item::Macro(macro_item)));
     }

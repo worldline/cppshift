@@ -246,6 +246,8 @@ pub enum Item<'de> {
     Template(ItemTemplate<'de>),
     /// Static assertion: `static_assert(sizeof(int) == 4);`
     StaticAssert(ItemStaticAssert<'de>),
+    /// Include directive: `#include <iostream>` or `#include "myfile.h"`
+    Include(ItemInclude<'de>),
     /// Preprocessor directive: `#include <iostream>`
     Macro(ItemMacro<'de>),
     /// Tokens not interpreted by the parser
@@ -386,6 +388,22 @@ pub struct ItemTemplate<'de> {
 pub struct ItemStaticAssert<'de> {
     pub expr: Expr<'de>,
     pub message: Option<Expr<'de>>,
+}
+
+/// The path in a `#include` directive.
+#[derive(Debug, Clone, PartialEq)]
+pub enum IncludePath<'de> {
+    /// System header enclosed in angle brackets: `<iostream>`
+    System(SourceSpan<'de>),
+    /// Local header enclosed in quotes: `"myheader.h"`
+    Local(SourceSpan<'de>),
+}
+
+/// A `#include` preprocessor directive: `#include <iostream>` or `#include "myfile.h"`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ItemInclude<'de> {
+    pub span: SourceSpan<'de>,
+    pub path: IncludePath<'de>,
 }
 
 /// A preprocessor directive.

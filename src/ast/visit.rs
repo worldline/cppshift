@@ -118,7 +118,7 @@ pub fn visit_item<'de, V: Visit<'de> + ?Sized>(v: &mut V, item: &Item<'de>) {
         Item::StaticAssert(i) => {
             v.visit_expr(&i.expr);
         }
-        Item::Macro(_) | Item::Verbatim(_) => {}
+        Item::Include(_) | Item::Macro(_) | Item::Verbatim(_) => {}
     }
 }
 

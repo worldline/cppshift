@@ -64,6 +64,7 @@ mod tests {
     async fn main_ast() {
         let main = r#"
             #include <iostream>
+            #include "module/myheader.h"
 
             #define ArgText(x) \
                 x##TEXT
@@ -87,6 +88,42 @@ mod tests {
         "#;
 
         let main_file = parse_file(main).unwrap();
+        let mut main_item_iter = main_file.items.iter();
+
+        let include_system_iostream = main_item_iter.next();
+        if let Some(Item::Include(ItemInclude { span, path })) = include_system_iostream {
+            assert_eq!(span.src(), "#include <iostream>");
+            if let IncludePath::System(path_span) = path {
+                assert_eq!(path_span.src(), "iostream");
+            } else {
+                panic!("Expected a system include path, got {:#?}", path);
+            }
+        } else {
+            panic!(
+                "Wrong first item: expected an include directive, got {:#?}",
+                include_system_iostream
+            );
+        }
+
+        let include_local_iostream = main_item_iter.next();
+        if let Some(Item::Include(ItemInclude { span, path })) = include_local_iostream {
+            assert_eq!(span.src(), "#include \"module/myheader.h\"");
+            if let IncludePath::Local(path_span) = path {
+                assert_eq!(path_span.src(), "module/myheader.h");
+            } else {
+                panic!("Expected a local include path, got {:#?}", path);
+            }
+        } else {
+            panic!(
+                "Wrong first item: expected an include directive, got {:#?}",
+                include_local_iostream
+            );
+        }
+
+        /*for item in &main_file.items {
+            panic!("{:#?}", item);
+        }*/
+
         assert!(!main_file.items.is_empty());
     }
 }
