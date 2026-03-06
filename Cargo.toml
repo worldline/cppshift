@@ -1,6 +1,6 @@
 [package]
 name = "cppshift"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Jérémy HERGAULT", "Enzo PASQUALINI"]
 description = "CPP parser and transpiler"
 repository = "https://github.com/worldline/cppshift"
@@ -10,6 +10,9 @@ license = "Apache-2.0"
 [dependencies]
 miette = { version = "7", features = ["fancy"] }
 thiserror = "2"
+syn = { version = "2", features = ["full", "extra-traits", "printing"] }
+quote = "1"
+proc-macro2 = "1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros"] }

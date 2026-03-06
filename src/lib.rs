@@ -1,5 +1,6 @@
 pub mod ast;
 pub mod lex;
+pub mod transpile;
 use std::fmt;
 
 pub use lex::Lexer;
@@ -31,6 +32,11 @@ impl<'de> SourceSpan<'de> {
     /// Getter of the source code value
     pub fn src(&self) -> &'de str {
         &self.src[core::ops::Range::from(*self)]
+    }
+
+    /// Returns the full backing source string (not just this span's slice).
+    pub fn full_source(&self) -> &'de str {
+        self.src
     }
 }
 

@@ -9,7 +9,7 @@ use super::item::Path;
 use super::punct::Punctuated;
 
 /// The kind of a fundamental (built-in) type.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FundamentalKind {
     Void,
     Bool,
