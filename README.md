@@ -1,5 +1,11 @@
 # CppShift
 
+[<img alt="github" src="https://img.shields.io/badge/github-46beaa?style=for-the-badge&labelColor=555555&logo=github" height="20">](https://github.com/worldline/cppshift)
+[<img alt="crates-io" src="https://img.shields.io/badge/crates.io-ffeb78?style=for-the-badge&labelColor=555555&logo=rust" height="20">](https://crates.io/crates/cppshift)
+[<img alt="docs-rs" src="https://img.shields.io/badge/docs.rs-41b4d2?style=for-the-badge&labelColor=555555&logo=docs.rs" height="20">](https://docs.rs/cppshift)
+[<img alt="build status" src="https://img.shields.io/github/actions/workflow/status/worldline/cppshift/ci.yml?branch%3Amain&style=for-the-badge" height="20">](https://github.com/worldline/cppshift/actions?query=branch%3Amain)
+[<img alt="dependency status" src="https://img.shields.io/deps-rs/repo/github/worldline/cppshift?style=for-the-badge" height="20">](https://deps.rs/repo/github/worldline/cppshift)
+
 This project provide a C++ scanner and a transpiler.
 The goal is not to use compiled C++ like [cxx](https://cxx.rs/) can do, but to convert c++ code into native Rust.
 

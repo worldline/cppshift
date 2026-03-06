@@ -1,9 +1,9 @@
 [package]
 name = "cppshift"
 version = "0.1.0"
-authors = ["Jérémy HERGAULT"]
+authors = ["Jérémy HERGAULT", "Enzo PASQUALINI"]
 description = "CPP parser and transpiler"
-repository = "https://github.com/reneca/cppshift"
+repository = "https://github.com/worldline/cppshift"
 edition = "2024"
 license = "Apache-2.0"
 
