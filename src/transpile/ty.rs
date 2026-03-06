@@ -2,16 +2,14 @@ use std::collections::HashMap;
 
 use crate::ast::expr::{Expr, LitKind};
 use crate::ast::item::Path;
-use crate::ast::ty::{FundamentalKind, TemplateArg, Type, TypeFundamental};
+use crate::ast::ty::{FundamentalKind, TemplateArg, Type};
 
 use super::error::TranspileError;
 
-impl TryFrom<&TypeFundamental<'_>> for syn::Type {
-    type Error = TranspileError;
-
-    fn try_from(f: &TypeFundamental<'_>) -> Result<Self, Self::Error> {
+impl From<FundamentalKind> for syn::Type {
+    fn from(kind: FundamentalKind) -> Self {
         use FundamentalKind::*;
-        let s = match f.kind {
+        let s = match kind {
             Void => "()",
             Bool => "bool",
             Char | Char8 | UnsignedChar => "u8",
@@ -25,10 +23,7 @@ impl TryFrom<&TypeFundamental<'_>> for syn::Type {
             SignedChar => "i8",
             UnsignedLong | UnsignedLongLong => "u64",
         };
-        syn::parse_str(s).map_err(|e| TranspileError::InvalidRustType {
-            rust_type: s.to_owned(),
-            reason: e.to_string(),
-        })
+        syn::parse_str(s).unwrap()
     }
 }
 
@@ -80,7 +75,7 @@ impl TypeMapper {
     /// `auto`, `decltype`, unsized array).
     pub fn map_type(&self, ty: &Type<'_>) -> Result<syn::Type, TranspileError> {
         match ty {
-            Type::Fundamental(f) => syn::Type::try_from(f),
+            Type::Fundamental(f) => Ok(syn::Type::from(f.kind)),
             Type::Path(p) => self.resolve_path(&p.path),
             Type::Ptr(p) => {
                 let inner = self.map_type(&p.pointee)?;
