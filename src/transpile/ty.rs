@@ -48,6 +48,7 @@ impl From<FundamentalKind> for syn::Type {
 /// let rust_ty = mapper.map_type(&ty).expect("fundamental types always map");
 /// assert_eq!(quote::quote!(#rust_ty).to_string(), "i32");
 /// ```
+#[derive(Debug, Clone)]
 pub struct TypeMapper {
     paths: HashMap<String, syn::Type>,
 }
