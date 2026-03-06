@@ -148,12 +148,12 @@ mod tests {
             assert_eq!(Visibility::Inherited, *vis);
 
             // Check signature
-            assert_eq!(false, sig.constexpr_token);
-            assert_eq!(false, sig.consteval_token);
-            assert_eq!(false, sig.inline_token);
-            assert_eq!(false, sig.virtual_token);
-            assert_eq!(false, sig.static_token);
-            assert_eq!(false, sig.explicit_token);
+            assert!(!sig.constexpr_token);
+            assert!(!sig.consteval_token);
+            assert!(!sig.inline_token);
+            assert!(!sig.virtual_token);
+            assert!(!sig.static_token);
+            assert!(!sig.explicit_token);
             if let Type::Fundamental(ty) = &sig.return_type {
                 assert_eq!(ty.span.src(), "int");
                 assert_eq!(ty.kind, FundamentalKind::Int);
@@ -194,8 +194,8 @@ mod tests {
             {
                 assert!(attrs.is_empty());
                 if let Type::Ptr(TypePtr { cv, pointee }) = &**element {
-                    assert_eq!(cv.const_token, false);
-                    assert_eq!(cv.volatile_token, false);
+                    assert!(!cv.const_token);
+                    assert!(!cv.volatile_token);
                     if let Type::Fundamental(fn_arg_ty) = &**pointee {
                         assert_eq!(fn_arg_ty.span.src(), "char");
                         assert_eq!(fn_arg_ty.kind, FundamentalKind::Char);
@@ -221,15 +221,15 @@ mod tests {
                     sig.inputs.iter().next()
                 );
             }
-            assert_eq!(false, sig.variadic);
+            assert!(!sig.variadic);
             // Trailing qualifiers
-            assert_eq!(false, sig.const_token);
-            assert_eq!(false, sig.noexcept_token);
-            assert_eq!(false, sig.override_token);
-            assert_eq!(false, sig.final_token);
-            assert_eq!(false, sig.pure_virtual);
-            assert_eq!(false, sig.defaulted);
-            assert_eq!(false, sig.deleted);
+            assert!(!sig.const_token);
+            assert!(!sig.noexcept_token);
+            assert!(!sig.override_token);
+            assert!(!sig.final_token);
+            assert!(!sig.pure_virtual);
+            assert!(!sig.defaulted);
+            assert!(!sig.deleted);
 
             let block = block.as_ref().expect("main function should have a block");
             assert_eq!(block.stmts.len(), 3);
