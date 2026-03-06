@@ -236,7 +236,9 @@ fn parse_attribute<'de>(p: &mut Parser<'de>) -> Result<Attribute<'de>, AstError>
 fn parse_item<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError> {
     // Skip preprocessor directives (lines starting with #)
     if p.peek_kind() == Some(TokenKind::NumberSign) {
-        if p.peek_nth(1).is_some_and(|t| t.src_span().src() == "include") {
+        if p.peek_nth(1)
+            .is_some_and(|t| t.src_span().src() == "include")
+        {
             return parse_item_include(p).map(Item::Include);
         }
         return parse_item_macro(p).map(Item::Macro);
@@ -363,7 +365,11 @@ fn parse_item_include<'de>(p: &mut Parser<'de>) -> Result<ItemInclude<'de>, AstE
         // Local include: "..." — strip surrounding quotes
         let str_tok = p.bump()?;
         let str_range: core::ops::Range<usize> = str_tok.src_span().into();
-        IncludePath::Local(SourceSpan::new(p.src, str_range.start + 1, str_range.len() - 2))
+        IncludePath::Local(SourceSpan::new(
+            p.src,
+            str_range.start + 1,
+            str_range.len() - 2,
+        ))
     };
 
     let span = p.span_since(start);
@@ -2084,7 +2090,9 @@ fn parse_block<'de>(p: &mut Parser<'de>) -> Result<Block<'de>, AstError> {
 fn parse_stmt<'de>(p: &mut Parser<'de>) -> Result<Stmt<'de>, AstError> {
     // Skip preprocessor directives inside function bodies
     if p.peek_kind() == Some(TokenKind::NumberSign) {
-        if p.peek_nth(1).is_some_and(|t| t.src_span().src() == "include") {
+        if p.peek_nth(1)
+            .is_some_and(|t| t.src_span().src() == "include")
+        {
             return parse_item_include(p).map(|i| Stmt::Item(Item::Include(i)));
         }
         let macro_item = parse_item_macro(p)?;
@@ -3406,14 +3414,14 @@ fn parse_expr_primary<'de>(p: &mut Parser<'de>) -> Result<Expr<'de>, AstError> {
             };
             let mut span = tok.src_span();
             // User-defined literal suffix: 0_potato, 1.0_sec, etc.
-            if let Some(suffix) = p.peek() {
-                if suffix.kind() == TokenKind::Ident && suffix.src().starts_with('_') {
-                    let s = p.bump()?;
-                    let s_range: core::ops::Range<usize> = s.src_span().into();
-                    let start_range: core::ops::Range<usize> = span.into();
-                    span =
-                        SourceSpan::new(p.src, start_range.start, s_range.end - start_range.start);
-                }
+            if let Some(suffix) = p.peek()
+                && suffix.kind() == TokenKind::Ident
+                && suffix.src().starts_with('_')
+            {
+                let s = p.bump()?;
+                let s_range: core::ops::Range<usize> = s.src_span().into();
+                let start_range: core::ops::Range<usize> = span.into();
+                span = SourceSpan::new(p.src, start_range.start, s_range.end - start_range.start);
             }
             Ok(Expr::Lit(ExprLit { span, kind }))
         }
