@@ -3,33 +3,32 @@
 
 use std::{fmt, iter::Peekable, str::CharIndices};
 
-use miette::{Diagnostic, Error};
+use miette::Diagnostic;
 use thiserror::Error;
 
 use crate::SourceSpan;
 
-#[derive(Diagnostic, Debug, Error)]
-#[error("Unexpected token '{token}'")]
-pub struct SingleTokenError {
-    #[source_code]
-    src: String,
-
-    pub token: char,
-
-    #[label = "this input character"]
-    err_span: miette::SourceSpan,
-}
-
-#[derive(Diagnostic, Debug, Error)]
-#[error("Wrong token separator `{separator}`")]
-pub struct TokenSeparatorError {
-    #[source_code]
-    src: String,
-
-    pub separator: char,
-
-    #[label = "this input separator"]
-    err_span: miette::SourceSpan,
+/// Errors that can occur during lexing
+#[derive(Clone, Diagnostic, Debug, Error)]
+pub enum LexError {
+    /// Unexpected token
+    #[error("Unexpected token '{token}'")]
+    SingleTokenError {
+        #[source_code]
+        src: String,
+        token: char,
+        #[label = "this input character"]
+        err_span: miette::SourceSpan,
+    },
+    /// Wrong token separator
+    #[error("Wrong token separator `{separator}`")]
+    TokenSeparatorError {
+        #[source_code]
+        src: String,
+        separator: char,
+        #[label = "this input separator"]
+        err_span: miette::SourceSpan,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -272,7 +271,7 @@ pub struct Token<'de> {
 }
 
 impl<'de> Token<'de> {
-    fn new(src_span: SourceSpan<'de>, kind: TokenKind) -> Token<'de> {
+    pub(crate) fn new(src_span: SourceSpan<'de>, kind: TokenKind) -> Token<'de> {
         Token { src_span, kind }
     }
 
@@ -428,6 +427,7 @@ impl<'de> fmt::Debug for Token<'de> {
 ///     );
 /// }
 /// ```
+#[derive(Clone)]
 pub struct Lexer<'de> {
     /// Source file content
     src: &'de str,
@@ -475,7 +475,7 @@ impl<'de> Lexer<'de> {
 }
 
 impl<'de> Iterator for Lexer<'de> {
-    type Item = Result<Token<'de>, Error>;
+    type Item = Result<Token<'de>, LexError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         while let Some((c_at, c)) = self.rest.next() {
@@ -527,7 +527,8 @@ impl<'de> Iterator for Lexer<'de> {
                                 _ => {
                                     // Decimal or octal - parse all valid chars
                                     while let Some((offset, c)) = self.rest.peek() {
-                                        if matches!(c, '0'..='9' | '.' | 'e' | 'E' | '+' | '-' | '\'' | 'a'..='z' | 'A'..='Z') {
+                                        if matches!(c, '0'..='9' | '.' | 'e' | 'E' | '+' | '-' | '\'' | 'a'..='z' | 'A'..='Z')
+                                        {
                                             end_offset = offset + c.len_utf8();
                                             self.rest.next();
                                         } else {
@@ -540,7 +541,8 @@ impl<'de> Iterator for Lexer<'de> {
                     } else {
                         // Regular decimal number with possible exponent and suffix
                         while let Some((offset, c)) = self.rest.peek() {
-                            if matches!(c, '0'..='9' | '.' | 'e' | 'E' | '+' | '-' | '\'' | 'a'..='z' | 'A'..='Z') {
+                            if matches!(c, '0'..='9' | '.' | 'e' | 'E' | '+' | '-' | '\'' | 'a'..='z' | 'A'..='Z')
+                            {
                                 end_offset = offset + c.len_utf8();
                                 self.rest.next();
                             } else {
@@ -674,12 +676,7 @@ impl<'de> Iterator for Lexer<'de> {
                                 {
                                     self.rest.next();
                                     self.rest.next();
-                                    return new_token!(
-                                        self,
-                                        c_at,
-                                        4,
-                                        TokenKind::DoubleNumberSign
-                                    );
+                                    return new_token!(self, c_at, 4, TokenKind::DoubleNumberSign);
                                 } else {
                                     return new_token!(self, c_at, 2, TokenKind::NumberSign);
                                 }
@@ -730,11 +727,11 @@ impl<'de> Iterator for Lexer<'de> {
                                     return new_token!(self, c_at, 3, TokenKind::Ellipsis);
                                 } else {
                                     // C++ can't contain two dots in a row.
-                                    return Some(Err(SingleTokenError {
+                                    return Some(Err(LexError::SingleTokenError {
                                         src: self.src.to_string(),
                                         token: '.',
                                         err_span: SourceSpan::new(self.src, c_at, 2).into(),
-                                    }.into()));
+                                    }));
                                 }
                             }
                             _ => {
@@ -822,7 +819,12 @@ impl<'de> Iterator for Lexer<'de> {
                                     }
                                 }
                                 // Unterminated comment - return what we have
-                                return new_token!(self, c_at, last_offset - c_at, TokenKind::Comment);
+                                return new_token!(
+                                    self,
+                                    c_at,
+                                    last_offset - c_at,
+                                    TokenKind::Comment
+                                );
                             }
                             '/' => {
                                 self.rest.next();
@@ -840,7 +842,12 @@ impl<'de> Iterator for Lexer<'de> {
                                     self.rest.next();
                                 }
 
-                                return new_token!(self, c_at, last_offset - c_at, TokenKind::Comment);
+                                return new_token!(
+                                    self,
+                                    c_at,
+                                    last_offset - c_at,
+                                    TokenKind::Comment
+                                );
                             }
                             '=' => {
                                 self.rest.next();
@@ -933,42 +940,79 @@ impl<'de> Iterator for Lexer<'de> {
                 }
                 '\'' => {
                     if let Some((_, c)) = self.rest.next() {
-                        if c == '\\' {
-                            self.rest.next();
-                            let src_span = SourceSpan::new(self.src, c_at, 4);
-                            if let Some((_, '\'')) = self.rest.next() {
-                                return new_token!(src_span, TokenKind::Char);
-                            } else {
-                                return Some(Err(TokenSeparatorError {
-                                    src: self.src.to_string(),
-                                    separator: '\'',
-                                    err_span: src_span.into(),
+                        if c == '\\'
+                            && let Some((_, esc)) = self.rest.next()
+                        {
+                            // For hex (\xNN), octal (\0nn), and unicode (\uNNNN, \UNNNNNNNN)
+                            // escapes, consume remaining digits of the sequence
+                            match esc {
+                                'x' => {
+                                    while self
+                                        .rest
+                                        .peek()
+                                        .is_some_and(|(_, ch)| ch.is_ascii_hexdigit())
+                                    {
+                                        self.rest.next();
+                                    }
                                 }
-                                .into()));
+                                '0'..='7' => {
+                                    for _ in 0..2 {
+                                        if self
+                                            .rest
+                                            .peek()
+                                            .is_some_and(|(_, ch)| matches!(ch, '0'..='7'))
+                                        {
+                                            self.rest.next();
+                                        } else {
+                                            break;
+                                        }
+                                    }
+                                }
+                                'u' => {
+                                    for _ in 0..4 {
+                                        if self
+                                            .rest
+                                            .peek()
+                                            .is_some_and(|(_, ch)| ch.is_ascii_hexdigit())
+                                        {
+                                            self.rest.next();
+                                        }
+                                    }
+                                }
+                                'U' => {
+                                    for _ in 0..8 {
+                                        if self
+                                            .rest
+                                            .peek()
+                                            .is_some_and(|(_, ch)| ch.is_ascii_hexdigit())
+                                        {
+                                            self.rest.next();
+                                        }
+                                    }
+                                }
+                                // Simple escapes (\n, \t, \\, \', \", etc.)
+                                _ => {}
                             }
+                        }
+
+                        if let Some((offset, '\'')) = self.rest.next() {
+                            return new_token!(self, c_at, offset + 1 - c_at, TokenKind::Char);
                         } else {
-                            let src_span = SourceSpan::new(self.src, c_at, 4);
-                            if let Some((_, '\'')) = self.rest.next() {
-                                return new_token!(src_span, TokenKind::Char);
-                            } else {
-                                return Some(Err(TokenSeparatorError {
-                                    src: self.src.to_string(),
-                                    separator: '\'',
-                                    err_span: src_span.into(),
-                                }
-                                .into()));
-                            }
+                            return Some(Err(LexError::TokenSeparatorError {
+                                src: self.src.to_string(),
+                                separator: '\'',
+                                err_span: miette::SourceSpan::from(c_at..c_at + 1),
+                            }));
                         }
                     }
                 }
                 c if c.is_whitespace() => continue,
                 c => {
-                    return Some(Err(SingleTokenError {
+                    return Some(Err(LexError::SingleTokenError {
                         src: self.src.to_string(),
                         token: c,
                         err_span: miette::SourceSpan::from(c_at..c_at + 1),
-                    }
-                    .into()));
+                    }));
                 }
             }
         }
@@ -1844,10 +1888,19 @@ mod tests {
         let mut lex = Lexer::new("int x;").peekable();
 
         // Peek should return the token without consuming
-        assert_eq!(Some(TokenKind::KeywordInt), lex.peek().and_then(|t| t.as_ref().ok().map(|t| t.kind())));
-        assert_eq!(Some(TokenKind::KeywordInt), lex.peek().and_then(|t| t.as_ref().ok().map(|t| t.kind())));
+        assert_eq!(
+            Some(TokenKind::KeywordInt),
+            lex.peek().and_then(|t| t.as_ref().ok().map(|t| t.kind()))
+        );
+        assert_eq!(
+            Some(TokenKind::KeywordInt),
+            lex.peek().and_then(|t| t.as_ref().ok().map(|t| t.kind()))
+        );
 
         lex.next();
-        assert_ne!(Some(TokenKind::KeywordInt), lex.peek().and_then(|t| t.as_ref().ok().map(|t| t.kind())));
+        assert_ne!(
+            Some(TokenKind::KeywordInt),
+            lex.peek().and_then(|t| t.as_ref().ok().map(|t| t.kind()))
+        );
     }
 }

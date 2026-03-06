@@ -1,8 +1,21 @@
+pub mod ast;
 pub mod lex;
+use std::fmt;
+
 pub use lex::Lexer;
 
 /// Source code span
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// Useful to track the position of a text fragment in the source code, for error reporting.
+///
+/// ```
+/// use cppshift::SourceSpan;
+///
+/// let src = "test";
+/// let src_span = SourceSpan::new(src, 1, 2);
+/// assert_eq!("es", src_span.src());
+/// assert_eq!((1..3), core::ops::Range::<usize>::from(src_span));
+/// ```
+#[derive(Clone, Copy, PartialEq)]
 pub struct SourceSpan<'de> {
     src: &'de str,
     offset: usize,
@@ -18,6 +31,16 @@ impl<'de> SourceSpan<'de> {
     /// Getter of the source code value
     pub fn src(&self) -> &'de str {
         &self.src[core::ops::Range::from(*self)]
+    }
+}
+
+impl<'de> fmt::Debug for SourceSpan<'de> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SourceSpan")
+            .field("src", &self.src())
+            .field("offset", &self.offset)
+            .field("len", &self.len)
+            .finish()
     }
 }
 
