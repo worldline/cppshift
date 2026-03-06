@@ -137,27 +137,42 @@ mod tests {
         }
 
         let main_function = main_item_iter.next();
-        if let Some(Item::Fn(ItemFn { attrs, vis, sig, block })) = main_function {
+        if let Some(Item::Fn(ItemFn {
+            attrs,
+            vis,
+            sig,
+            block,
+        })) = main_function
+        {
             assert!(attrs.is_empty());
             assert_eq!(Visibility::Inherited, *vis);
 
             // Check signature
-            assert_eq!(false, sig.constexpr_token);
-            assert_eq!(false, sig.consteval_token);
-            assert_eq!(false, sig.inline_token);
-            assert_eq!(false, sig.virtual_token);
-            assert_eq!(false, sig.static_token);
-            assert_eq!(false, sig.explicit_token);
+            assert!(!sig.constexpr_token);
+            assert!(!sig.consteval_token);
+            assert!(!sig.inline_token);
+            assert!(!sig.virtual_token);
+            assert!(!sig.static_token);
+            assert!(!sig.explicit_token);
             if let Type::Fundamental(ty) = &sig.return_type {
                 assert_eq!(ty.span.src(), "int");
                 assert_eq!(ty.kind, FundamentalKind::Int);
             } else {
-                panic!("Expected a fundamental return type, got {:#?}", sig.return_type);
+                panic!(
+                    "Expected a fundamental return type, got {:#?}",
+                    sig.return_type
+                );
             }
             assert_eq!(sig.ident.span.src(), "main");
             assert_eq!(sig.ident.sym, "main");
             let mut sig_inputs_iter = sig.inputs.iter();
-            if let Some(FnArg { attrs, ty: Type::Fundamental(fn_arg_ty), ident: Some(fn_arg_ident), default_value }) = sig_inputs_iter.next() {
+            if let Some(FnArg {
+                attrs,
+                ty: Type::Fundamental(fn_arg_ty),
+                ident: Some(fn_arg_ident),
+                default_value,
+            }) = sig_inputs_iter.next()
+            {
                 assert!(attrs.is_empty());
                 assert_eq!(fn_arg_ty.span.src(), "int");
                 assert_eq!(fn_arg_ty.kind, FundamentalKind::Int);
@@ -165,38 +180,56 @@ mod tests {
                 assert_eq!(fn_arg_ident.sym, "argc");
                 assert_eq!(&None, default_value);
             } else {
-                panic!("Expected a typed argument for argc, got {:#?}", sig.inputs.iter().next());
+                panic!(
+                    "Expected a typed argument for argc, got {:#?}",
+                    sig.inputs.iter().next()
+                );
             }
-            if let Some(FnArg { attrs, ty: Type::Array(TypeArray { element, size }), ident: Some(fn_arg_ident), default_value }) = sig_inputs_iter.next() {
+            if let Some(FnArg {
+                attrs,
+                ty: Type::Array(TypeArray { element, size }),
+                ident: Some(fn_arg_ident),
+                default_value,
+            }) = sig_inputs_iter.next()
+            {
                 assert!(attrs.is_empty());
                 if let Type::Ptr(TypePtr { cv, pointee }) = &**element {
-                    assert_eq!(cv.const_token, false);
-                    assert_eq!(cv.volatile_token, false);
+                    assert!(!cv.const_token);
+                    assert!(!cv.volatile_token);
                     if let Type::Fundamental(fn_arg_ty) = &**pointee {
                         assert_eq!(fn_arg_ty.span.src(), "char");
                         assert_eq!(fn_arg_ty.kind, FundamentalKind::Char);
                     } else {
-                        panic!("Expected a fundamental pointee type for argv, got {:#?}", pointee);
+                        panic!(
+                            "Expected a fundamental pointee type for argv, got {:#?}",
+                            pointee
+                        );
                     }
                 } else {
-                    panic!("Expected a fundamental element type for argv, got {:#?}", element);
+                    panic!(
+                        "Expected a fundamental element type for argv, got {:#?}",
+                        element
+                    );
                 }
                 assert_eq!(size, &None);
                 assert_eq!(fn_arg_ident.span.src(), "argv");
                 assert_eq!(fn_arg_ident.sym, "argv");
                 assert_eq!(&None, default_value);
             } else {
-                panic!("Expected a typed argument for argv, got {:#?}", sig.inputs.iter().next());
+                panic!(
+                    "Expected a typed argument for argv, got {:#?}",
+                    sig.inputs.iter().next()
+                );
             }
-            assert_eq!(false, sig.variadic);
+            assert!(!sig.variadic);
             // Trailing qualifiers
-            assert_eq!(false, sig.const_token);
-            assert_eq!(false, sig.noexcept_token);
-            assert_eq!(false, sig.override_token);
-            assert_eq!(false, sig.final_token);
-            assert_eq!(false, sig.pure_virtual);
-            assert_eq!(false, sig.defaulted);
-            assert_eq!(false, sig.deleted);
+            assert!(!sig.const_token);
+            assert!(!sig.noexcept_token);
+            assert!(!sig.override_token);
+            assert!(!sig.final_token);
+            assert!(!sig.pure_virtual);
+            assert!(!sig.defaulted);
+            assert!(!sig.deleted);
 
             let block = block.as_ref().expect("main function should have a block");
             assert_eq!(block.stmts.len(), 3);
@@ -204,7 +237,10 @@ mod tests {
 
             // stmt 1: std::cout << "Hello, world" << std::endl;
             let stmt1 = stmts.next().unwrap();
-            if let Stmt::Expr(StmtExpr { expr: Expr::Binary(ExprBinary { lhs, op, rhs }) }) = stmt1 {
+            if let Stmt::Expr(StmtExpr {
+                expr: Expr::Binary(ExprBinary { lhs, op, rhs }),
+            }) = stmt1
+            {
                 assert_eq!(*op, BinaryOp::ShiftLeft);
                 if let Expr::Path(ExprPath { path }) = rhs.as_ref() {
                     assert_eq!(path.segments[0].ident.sym, "std");
@@ -212,7 +248,12 @@ mod tests {
                 } else {
                     panic!("Expected std::endl, got {:#?}", rhs);
                 }
-                if let Expr::Binary(ExprBinary { lhs: inner_lhs, op: inner_op, rhs: inner_rhs }) = lhs.as_ref() {
+                if let Expr::Binary(ExprBinary {
+                    lhs: inner_lhs,
+                    op: inner_op,
+                    rhs: inner_rhs,
+                }) = lhs.as_ref()
+                {
                     assert_eq!(*inner_op, BinaryOp::ShiftLeft);
                     if let Expr::Path(ExprPath { path }) = inner_lhs.as_ref() {
                         assert_eq!(path.segments[0].ident.sym, "std");
@@ -245,7 +286,10 @@ mod tests {
                 let mut switch_stmts = body.stmts.iter();
 
                 // case 1:
-                if let Stmt::Case(StmtCase { value: Expr::Lit(ExprLit { span, kind }) }) = switch_stmts.next().unwrap() {
+                if let Stmt::Case(StmtCase {
+                    value: Expr::Lit(ExprLit { span, kind }),
+                }) = switch_stmts.next().unwrap()
+                {
                     assert_eq!(*kind, LitKind::Integer);
                     assert_eq!(span.src(), "1");
                 } else {
@@ -253,7 +297,10 @@ mod tests {
                 }
 
                 // case 2:
-                if let Stmt::Case(StmtCase { value: Expr::Lit(ExprLit { span, kind }) }) = switch_stmts.next().unwrap() {
+                if let Stmt::Case(StmtCase {
+                    value: Expr::Lit(ExprLit { span, kind }),
+                }) = switch_stmts.next().unwrap()
+                {
                     assert_eq!(*kind, LitKind::Integer);
                     assert_eq!(span.src(), "2");
                 } else {
@@ -261,7 +308,10 @@ mod tests {
                 }
 
                 // std::cout << "first and second" << std::endl;
-                if let Stmt::Expr(StmtExpr { expr: Expr::Binary(ExprBinary { lhs, op, rhs }) }) = switch_stmts.next().unwrap() {
+                if let Stmt::Expr(StmtExpr {
+                    expr: Expr::Binary(ExprBinary { lhs, op, rhs }),
+                }) = switch_stmts.next().unwrap()
+                {
                     assert_eq!(*op, BinaryOp::ShiftLeft);
                     if let Expr::Path(ExprPath { path }) = rhs.as_ref() {
                         assert_eq!(path.segments[1].ident.sym, "endl");
@@ -286,7 +336,10 @@ mod tests {
                 assert_eq!(switch_stmts.next().unwrap(), &Stmt::Empty);
 
                 // case 3:
-                if let Stmt::Case(StmtCase { value: Expr::Lit(ExprLit { span, kind }) }) = switch_stmts.next().unwrap() {
+                if let Stmt::Case(StmtCase {
+                    value: Expr::Lit(ExprLit { span, kind }),
+                }) = switch_stmts.next().unwrap()
+                {
                     assert_eq!(*kind, LitKind::Integer);
                     assert_eq!(span.src(), "3");
                 } else {
@@ -294,7 +347,10 @@ mod tests {
                 }
 
                 // std::cout << "fallthrough" << std::endl;
-                if let Stmt::Expr(StmtExpr { expr: Expr::Binary(ExprBinary { lhs, .. }) }) = switch_stmts.next().unwrap() {
+                if let Stmt::Expr(StmtExpr {
+                    expr: Expr::Binary(ExprBinary { lhs, .. }),
+                }) = switch_stmts.next().unwrap()
+                {
                     if let Expr::Binary(ExprBinary { rhs: inner_rhs, .. }) = lhs.as_ref() {
                         if let Expr::Lit(ExprLit { span, kind }) = inner_rhs.as_ref() {
                             assert_eq!(*kind, LitKind::String);
@@ -317,7 +373,10 @@ mod tests {
 
             // stmt 3: return 0;
             let stmt3 = stmts.next().unwrap();
-            if let Stmt::Return(StmtReturn { expr: Some(Expr::Lit(ExprLit { span, kind })) }) = stmt3 {
+            if let Stmt::Return(StmtReturn {
+                expr: Some(Expr::Lit(ExprLit { span, kind })),
+            }) = stmt3
+            {
                 assert_eq!(*kind, LitKind::Integer);
                 assert_eq!(span.src(), "0");
             } else {
