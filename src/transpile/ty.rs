@@ -1,5 +1,8 @@
 use std::collections::HashMap;
 
+use serde::de::{self, MapAccess, Visitor};
+use serde::Deserialize;
+
 use crate::ast::expr::{Expr, LitKind};
 use crate::ast::item::Path;
 use crate::ast::ty::{FundamentalKind, TemplateArg, Type};
@@ -184,6 +187,40 @@ impl TypeMapper {
 impl Default for TypeMapper {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl<'de> Deserialize<'de> for TypeMapper {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct TypeMapperVisitor;
+
+        impl<'de> Visitor<'de> for TypeMapperVisitor {
+            type Value = TypeMapper;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a map of C++ type paths to Rust type strings")
+            }
+
+            fn visit_map<M>(self, mut access: M) -> Result<TypeMapper, M::Error>
+            where
+                M: MapAccess<'de>,
+            {
+                let mut builder = TypeMapper::builder();
+                while let Some((cpp_path, rust_type)) =
+                    access.next_entry::<String, String>()?
+                {
+                    builder = builder
+                        .map_path(&cpp_path, &rust_type)
+                        .map_err(de::Error::custom)?;
+                }
+                Ok(builder.build())
+            }
+        }
+
+        deserializer.deserialize_map(TypeMapperVisitor)
     }
 }
 

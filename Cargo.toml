@@ -10,6 +10,7 @@ license = "Apache-2.0"
 [dependencies]
 miette = { version = "7", features = ["fancy"] }
 thiserror = "2"
+serde = { version = "1", features = ["derive"] }
 syn = { version = "2", features = ["full", "extra-traits", "printing"] }
 quote = "1"
 proc-macro2 = "1"
