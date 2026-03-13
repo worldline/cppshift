@@ -3,6 +3,8 @@
 //! Each variant of [`Item`] corresponds to a top-level declaration in a C++ translation unit,
 //! following the naming conventions of `syn::Item`.
 
+use std::fmt;
+
 use crate::SourceSpan;
 use crate::lex::Token;
 
@@ -51,6 +53,20 @@ pub struct Attribute<'de> {
 pub struct Path<'de> {
     pub leading_colon: bool,
     pub segments: Vec<PathSegment<'de>>,
+}
+
+impl<'de> fmt::Display for Path<'de> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            self.segments
+                .iter()
+                .map(|s| s.ident.sym)
+                .collect::<Vec<_>>()
+                .join("::")
+        )
+    }
 }
 
 /// A single segment of a path, analogous to `syn::PathSegment`.

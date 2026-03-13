@@ -1,11 +1,14 @@
 use std::collections::HashMap;
 
-use serde::de::{self, MapAccess, Visitor};
+use proc_macro2::TokenStream;
 use serde::Deserialize;
+use serde::de::{self, MapAccess, Visitor};
 
+use crate::ast::ItemTypedef;
 use crate::ast::expr::{Expr, LitKind};
 use crate::ast::item::Path;
 use crate::ast::ty::{FundamentalKind, TemplateArg, Type};
+use crate::transpile::{Transpile, Transpiler};
 
 use super::error::TranspileError;
 
@@ -104,10 +107,7 @@ impl TypeMapper {
                     Some(Expr::Lit(lit)) if lit.kind == LitKind::Integer => {
                         let n: usize = lit.span.src().parse().map_err(|_| {
                             TranspileError::UnsupportedType {
-                                message: format!(
-                                    "invalid array size literal `{}`",
-                                    lit.span.src()
-                                ),
+                                message: format!("invalid array size literal `{}`", lit.span.src()),
                                 src: lit.span.full_source().to_owned(),
                                 err_span: lit.span.into(),
                             }
@@ -128,12 +128,7 @@ impl TypeMapper {
             }
             Type::Qualified(q) => self.map_type(&q.ty),
             Type::TemplateInst(t) => {
-                let path_str = path_to_string(&t.path);
-                let base_ty =
-                    self.paths
-                        .get(&path_str)
-                        .cloned()
-                        .ok_or_else(|| unmapped_path_error(&path_str, &t.path))?;
+                let base_ty = self.resolve_path(&t.path)?;
                 let mapped_args: Result<Vec<syn::Type>, _> = t
                     .args
                     .iter()
@@ -150,8 +145,8 @@ impl TypeMapper {
                 if let syn::Type::Path(ref mut type_path) = result
                     && let Some(last_seg) = type_path.path.segments.last_mut()
                 {
-                    last_seg.arguments = syn::PathArguments::AngleBracketed(
-                        syn::AngleBracketedGenericArguments {
+                    last_seg.arguments =
+                        syn::PathArguments::AngleBracketed(syn::AngleBracketedGenericArguments {
                             colon2_token: None,
                             lt_token: syn::token::Lt::default(),
                             args: mapped_args
@@ -159,8 +154,7 @@ impl TypeMapper {
                                 .map(syn::GenericArgument::Type)
                                 .collect(),
                             gt_token: syn::token::Gt::default(),
-                        },
-                    );
+                        });
                 }
                 Ok(result)
             }
@@ -177,11 +171,12 @@ impl TypeMapper {
     }
 
     fn resolve_path(&self, path: &Path<'_>) -> Result<syn::Type, TranspileError> {
-        let key = path_to_string(path);
-        self.paths
-            .get(&key)
-            .cloned()
-            .ok_or_else(|| unmapped_path_error(&key, path))
+        let key = path.to_string();
+        if let Some(ty) = self.paths.get(&key) {
+            Ok(ty.clone())
+        } else {
+            syn::Type::try_from(path.clone()).map_err(|_| unmapped_path_error(&key, path))
+        }
     }
 }
 
@@ -210,9 +205,7 @@ impl<'de> Deserialize<'de> for TypeMapper {
                 M: MapAccess<'de>,
             {
                 let mut builder = TypeMapper::builder();
-                while let Some((cpp_path, rust_type)) =
-                    access.next_entry::<String, String>()?
-                {
+                while let Some((cpp_path, rust_type)) = access.next_entry::<String, String>()? {
                     builder = builder
                         .map_path(&cpp_path, &rust_type)
                         .map_err(de::Error::custom)?;
@@ -253,14 +246,6 @@ impl TypeMapperBuilder {
     pub fn build(self) -> TypeMapper {
         TypeMapper { paths: self.paths }
     }
-}
-
-fn path_to_string(path: &Path<'_>) -> String {
-    path.segments
-        .iter()
-        .map(|s| s.ident.sym)
-        .collect::<Vec<_>>()
-        .join("::")
 }
 
 /// Build an [`TranspileError::UnmappedPath`] from a path string and AST path.
@@ -323,16 +308,41 @@ fn expr_span<'de>(expr: &Expr<'de>) -> Option<crate::SourceSpan<'de>> {
     }
 }
 
+impl<'de> Transpile for ItemTypedef<'de> {
+    fn transpile(
+        &self,
+        transpiler: &Transpiler,
+        tokens: &mut TokenStream,
+    ) -> Result<(), TranspileError> {
+        let name = self.ident;
+        if let Type::Path(p) = &self.ty {
+            let rust_ty = transpiler.ty_mapper.resolve_path(&p.path)?;
+            tokens.extend(quote::quote! {
+                #[doc = concat!(" Auto-transpiled type for ", stringify!(#name))]
+                pub type #name = #rust_ty;
+            });
+        } else {
+            let rust_ty = transpiler.ty_mapper.map_type(&self.ty)?;
+            tokens.extend(quote::quote! {
+                #[doc = concat!(" Auto-transpiled type for ", stringify!(#name))]
+                pub type #name = #rust_ty;
+            });
+        }
+
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use quote::quote;
 
+    use crate::SourceSpan;
     use crate::ast::expr::ExprLit;
     use crate::ast::item::{Ident, PathSegment};
     use crate::ast::punct::Punctuated;
-    use crate::ast::ty::*;
-    use crate::SourceSpan;
+    use crate::ast::{parse_file, ty::*};
 
     fn ty_str(ty: &syn::Type) -> String {
         quote!(#ty).to_string()
@@ -367,6 +377,56 @@ mod tests {
                 })
                 .collect(),
         }
+    }
+
+    #[test]
+    fn typedef_transpiles() -> Result<(), TranspileError> {
+        let transpiler = Transpiler {
+            ty_mapper: TypeMapper::builder()
+                .map_path("std::string", "BytesMut")?
+                .build(),
+        };
+
+        let typedef_header = r#"
+            typedef Custom::int16 MyInt16;
+            typedef std::string MyString;
+            typedef char type24[3];
+        "#;
+
+        let typedef_file = parse_file(typedef_header).unwrap();
+        let mut typedef_iter = typedef_file.items.iter();
+
+        match typedef_iter.next() {
+            Some(crate::ast::Item::Typedef(t)) => {
+                assert_eq!(
+                    "# [doc = concat ! (\" Auto-transpiled type for \" , stringify ! (MyInt16))] pub type MyInt16 = Custom :: int16 ;",
+                    t.transpile_token_stream(&transpiler)?.to_string()
+                );
+            }
+            t => panic!("unexpected typedef {t:?}"),
+        };
+
+        match typedef_iter.next() {
+            Some(crate::ast::Item::Typedef(t)) => {
+                assert_eq!(
+                    "# [doc = concat ! (\" Auto-transpiled type for \" , stringify ! (MyString))] pub type MyString = BytesMut ;",
+                    t.transpile_token_stream(&transpiler)?.to_string()
+                );
+            }
+            t => panic!("unexpected typedef {t:?}"),
+        };
+
+        match typedef_iter.next() {
+            Some(crate::ast::Item::Typedef(t)) => {
+                assert_eq!(
+                    "# [doc = concat ! (\" Auto-transpiled type for \" , stringify ! (type24))] pub type type24 = [u8 ; 3] ;",
+                    t.transpile_token_stream(&transpiler)?.to_string()
+                );
+            }
+            t => panic!("unexpected typedef {t:?}"),
+        };
+
+        Ok(())
     }
 
     // ---- Fundamental types (table-driven) ----
@@ -425,11 +485,12 @@ mod tests {
     }
 
     #[test]
-    fn path_unknown_returns_err() {
+    fn path_unknown_passes_through() -> Result<(), TranspileError> {
         let mapper = TypeMapper::new();
         let src = "Unknown";
         let ty = make_path(src, &[src]);
-        assert!(mapper.map_type(&ty).is_err());
+        assert_eq!(ty_str(&mapper.map_type(&ty)?), "Unknown");
+        Ok(())
     }
 
     // ---- Composite types ----
@@ -571,7 +632,7 @@ mod tests {
     }
 
     #[test]
-    fn template_inst_unknown_path() {
+    fn template_inst_unknown_path_passes_through() -> Result<(), TranspileError> {
         let mapper = TypeMapper::new();
         let path_src = "std::deque";
         let inner_src = "int";
@@ -580,11 +641,12 @@ mod tests {
             path: make_raw_path(path_src, &[&path_src[..3], &path_src[5..]]),
             args: vec![TemplateArg::Type(inner)],
         });
-        assert!(mapper.map_type(&ty).is_err());
+        assert_eq!(ty_str(&mapper.map_type(&ty)?), "std :: deque < i32 >");
+        Ok(())
     }
 
     #[test]
-    fn template_inst_unmappable_arg() -> Result<(), TranspileError> {
+    fn template_inst_unmapped_arg_passes_through() -> Result<(), TranspileError> {
         let mapper = TypeMapper::builder()
             .map_path("std::vector", "Vec")?
             .build();
@@ -596,7 +658,7 @@ mod tests {
             path: make_raw_path(path_src, &[&path_src[..3], &path_src[5..]]),
             args: vec![TemplateArg::Type(inner)],
         });
-        assert!(mapper.map_type(&ty).is_err());
+        assert_eq!(ty_str(&mapper.map_type(&ty)?), "Vec < Unknown >");
         Ok(())
     }
 
@@ -630,7 +692,7 @@ mod tests {
     // ---- Inner type unknown in composite ----
 
     #[test]
-    fn ptr_unknown_inner_returns_err() {
+    fn ptr_unknown_inner_passes_through() -> Result<(), TranspileError> {
         let mapper = TypeMapper::new();
         let src = "Unknown";
         let inner = make_path(src, &[src]);
@@ -638,7 +700,8 @@ mod tests {
             cv: CvQualifiers::default(),
             pointee: Box::new(inner),
         });
-        assert!(mapper.map_type(&ty).is_err());
+        assert_eq!(ty_str(&mapper.map_type(&ty)?), "* mut Unknown");
+        Ok(())
     }
 
     // ---- Function pointer ----
@@ -667,7 +730,7 @@ mod tests {
     }
 
     #[test]
-    fn fn_ptr_unmappable_param() {
+    fn fn_ptr_unmapped_param_passes_through() -> Result<(), TranspileError> {
         let mapper = TypeMapper::new();
         let ret_src = "int";
         let p_src = "Unknown";
@@ -682,7 +745,8 @@ mod tests {
             return_type: Box::new(ret),
             params,
         });
-        assert!(mapper.map_type(&ty).is_err());
+        assert_eq!(ty_str(&mapper.map_type(&ty)?), "fn (Unknown) -> i32");
+        Ok(())
     }
 
     // ---- Builder error ----
@@ -698,8 +762,10 @@ mod tests {
     #[test]
     fn error_is_diagnostic() {
         let mapper = TypeMapper::new();
-        let src = "Unknown";
-        let ty = make_path(src, &[src]);
+        let src = "auto";
+        let ty = Type::Auto(TypeAuto {
+            span: SourceSpan::new(src, 0, 4),
+        });
         let err = mapper.map_type(&ty).unwrap_err();
         // TranspileError implements miette::Diagnostic
         let diagnostic: &dyn miette::Diagnostic = &err;

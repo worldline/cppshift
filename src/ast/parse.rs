@@ -545,8 +545,22 @@ fn parse_item_using<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError> {
 
 fn parse_item_typedef<'de>(p: &mut Parser<'de>) -> Result<ItemTypedef<'de>, AstError> {
     p.expect(TokenKind::KeywordTypedef)?;
-    let ty = parse_type(p)?;
+    let mut ty = parse_type(p)?;
     let ident = parse_ident(p)?;
+    // Handle C-style array typedefs: `typedef char type24[3];`
+    while p.peek_kind() == Some(TokenKind::LeftBracket) {
+        p.bump()?;
+        let size = if p.peek_kind() != Some(TokenKind::RightBracket) {
+            Some(parse_expr(p)?)
+        } else {
+            None
+        };
+        p.expect(TokenKind::RightBracket)?;
+        ty = Type::Array(TypeArray {
+            element: Box::new(ty),
+            size,
+        });
+    }
     p.expect(TokenKind::Semicolon)?;
     Ok(ItemTypedef {
         attrs: Vec::new(),
@@ -4006,6 +4020,41 @@ mod tests {
         match &file.items[0] {
             Item::Typedef(td) => {
                 assert_eq!(td.ident.sym, "size_t");
+            }
+            other => panic!("expected Typedef, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_typedef_array() {
+        let file = parse("typedef char type24[3];");
+        match &file.items[0] {
+            Item::Typedef(td) => {
+                assert_eq!(td.ident.sym, "type24");
+                match &td.ty {
+                    Type::Array(arr) => {
+                        assert!(matches!(arr.element.as_ref(), Type::Fundamental(_)));
+                        assert!(arr.size.is_some());
+                    }
+                    other => panic!("expected Array type, got {other:?}"),
+                }
+            }
+            other => panic!("expected Typedef, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_typedef_array_2d() {
+        let file = parse("typedef int matrix[3][4];");
+        match &file.items[0] {
+            Item::Typedef(td) => {
+                assert_eq!(td.ident.sym, "matrix");
+                match &td.ty {
+                    Type::Array(outer) => {
+                        assert!(matches!(outer.element.as_ref(), Type::Array(_)));
+                    }
+                    other => panic!("expected Array type, got {other:?}"),
+                }
             }
             other => panic!("expected Typedef, got {other:?}"),
         }

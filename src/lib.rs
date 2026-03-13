@@ -1,5 +1,7 @@
+#[cfg(feature = "ast")]
 pub mod ast;
 pub mod lex;
+#[cfg(feature = "transpiler")]
 pub mod transpile;
 use std::fmt;
 
