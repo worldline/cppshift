@@ -67,6 +67,17 @@ pub enum Type<'de> {
     Qualified(TypeQualified<'de>),
 }
 
+impl<'de> Type<'de> {
+    /// Check if the type is `auto`.
+    pub fn is_auto(&self) -> bool {
+        match self {
+            Type::Auto(_) => true,
+            Type::Qualified(q) => q.ty.is_auto(),
+            _ => false,
+        }
+    }
+}
+
 /// A fundamental (built-in) type.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TypeFundamental<'de> {
