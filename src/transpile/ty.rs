@@ -6,8 +6,9 @@ use serde::de::{self, MapAccess, Visitor};
 
 use crate::ast::ItemTypedef;
 use crate::ast::expr::{Expr, LitKind};
-use crate::ast::item::Path;
+use crate::ast::item::{ItemConst, ItemStatic, Path};
 use crate::ast::ty::{FundamentalKind, TemplateArg, Type};
+use crate::transpile::expr::expr_span;
 use crate::transpile::{Transpile, Transpiler};
 
 use super::error::TranspileError;
@@ -298,16 +299,6 @@ fn type_span<'de>(ty: &Type<'de>) -> Option<crate::SourceSpan<'de>> {
     }
 }
 
-/// Extract a source span from an expression (best-effort).
-fn expr_span<'de>(expr: &Expr<'de>) -> Option<crate::SourceSpan<'de>> {
-    match expr {
-        Expr::Lit(l) => Some(l.span),
-        Expr::Ident(i) => Some(i.ident.span),
-        Expr::Path(p) => p.path.segments.first().map(|s| s.ident.span),
-        _ => None,
-    }
-}
-
 impl<'de> Transpile for ItemTypedef<'de> {
     fn transpile(
         &self,
@@ -328,6 +319,47 @@ impl<'de> Transpile for ItemTypedef<'de> {
                 pub type #name = #rust_ty;
             });
         }
+
+        Ok(())
+    }
+}
+
+impl<'de> Transpile for ItemConst<'de> {
+    fn transpile(
+        &self,
+        transpiler: &Transpiler,
+        tokens: &mut TokenStream,
+    ) -> Result<(), TranspileError> {
+        let name = self.ident;
+        let rust_ty = transpiler.ty_mapper.map_type(&self.ty)?;
+        let mut expr_tokens = TokenStream::new();
+        self.expr.transpile(transpiler, &mut expr_tokens)?;
+        tokens.extend(quote::quote! {
+            pub const #name: #rust_ty = #expr_tokens;
+        });
+
+        Ok(())
+    }
+}
+
+impl<'de> Transpile for ItemStatic<'de> {
+    fn transpile(
+        &self,
+        transpiler: &Transpiler,
+        tokens: &mut TokenStream,
+    ) -> Result<(), TranspileError> {
+        let name = self.ident;
+        let rust_ty = transpiler.ty_mapper.map_type(&self.ty)?;
+        let expr = self.expr.as_ref().ok_or_else(|| TranspileError::UnsupportedExpr {
+            message: "Rust statics require an initializer".to_owned(),
+            src: name.span.full_source().to_owned(),
+            err_span: name.span.into(),
+        })?;
+        let mut expr_tokens = TokenStream::new();
+        expr.transpile(transpiler, &mut expr_tokens)?;
+        tokens.extend(quote::quote! {
+            pub static #name: #rust_ty = #expr_tokens;
+        });
 
         Ok(())
     }
@@ -771,5 +803,88 @@ mod tests {
         let diagnostic: &dyn miette::Diagnostic = &err;
         assert!(diagnostic.source_code().is_some());
         assert!(diagnostic.labels().is_some());
+    }
+
+    // ---- ItemConst / ItemStatic transpilation ----
+
+    #[test]
+    fn const_int_transpiles() -> Result<(), TranspileError> {
+        let transpiler = Transpiler::default();
+        let src = "const int MAX = 100;";
+        let file = parse_file(src).unwrap();
+        match &file.items[0] {
+            crate::ast::Item::Const(c) => {
+                assert_eq!(
+                    c.transpile_token_stream(&transpiler)?.to_string(),
+                    "pub const MAX : i32 = 100 ;"
+                );
+            }
+            item => panic!("expected ItemConst, got {item:?}"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn constexpr_transpiles() -> Result<(), TranspileError> {
+        let transpiler = Transpiler::default();
+        let src = "constexpr double PI = 3.14;";
+        let file = parse_file(src).unwrap();
+        match &file.items[0] {
+            crate::ast::Item::Const(c) => {
+                assert_eq!(
+                    c.transpile_token_stream(&transpiler)?.to_string(),
+                    "pub const PI : f64 = 3.14 ;"
+                );
+            }
+            item => panic!("expected ItemConst, got {item:?}"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn const_bool_transpiles() -> Result<(), TranspileError> {
+        let transpiler = Transpiler::default();
+        let src = "const bool FLAG = true;";
+        let file = parse_file(src).unwrap();
+        match &file.items[0] {
+            crate::ast::Item::Const(c) => {
+                assert_eq!(
+                    c.transpile_token_stream(&transpiler)?.to_string(),
+                    "pub const FLAG : bool = true ;"
+                );
+            }
+            item => panic!("expected ItemConst, got {item:?}"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn static_int_transpiles() -> Result<(), TranspileError> {
+        let transpiler = Transpiler::default();
+        let src = "static int count = 0;";
+        let file = parse_file(src).unwrap();
+        match &file.items[0] {
+            crate::ast::Item::Static(s) => {
+                assert_eq!(
+                    s.transpile_token_stream(&transpiler)?.to_string(),
+                    "pub static count : i32 = 0 ;"
+                );
+            }
+            item => panic!("expected ItemStatic, got {item:?}"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn static_no_init_errors() {
+        let transpiler = Transpiler::default();
+        let src = "static int count;";
+        let file = parse_file(src).unwrap();
+        match &file.items[0] {
+            crate::ast::Item::Static(s) => {
+                assert!(s.transpile_token_stream(&transpiler).is_err());
+            }
+            item => panic!("expected ItemStatic, got {item:?}"),
+        }
     }
 }

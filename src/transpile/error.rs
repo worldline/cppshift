@@ -24,6 +24,15 @@ pub enum TranspileError {
         #[label = "{message}"]
         err_span: miette::SourceSpan,
     },
+    /// C++ expression cannot be transpiled to Rust
+    #[error("{message}")]
+    UnsupportedExpr {
+        message: String,
+        #[source_code]
+        src: String,
+        #[label = "{message}"]
+        err_span: miette::SourceSpan,
+    },
     /// Invalid Rust type syntax provided to the builder
     #[error("Invalid Rust type syntax `{rust_type}`: {reason}")]
     InvalidRustType { rust_type: String, reason: String },

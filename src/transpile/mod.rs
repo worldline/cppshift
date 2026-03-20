@@ -1,6 +1,7 @@
 //! Transpiler module to convert C++ ([`crate::ast`]) into Rust ([`syn`])
 
 pub mod error;
+pub mod expr;
 pub mod item;
 pub mod ty;
 
