@@ -19,6 +19,7 @@ pub enum TranspileError {
     #[error("{message}")]
     UnsupportedType {
         message: String,
+        ty: String,
         #[source_code]
         src: String,
         #[label = "{message}"]
@@ -28,6 +29,7 @@ pub enum TranspileError {
     #[error("{message}")]
     UnsupportedExpr {
         message: String,
+        expr: String,
         #[source_code]
         src: String,
         #[label = "{message}"]

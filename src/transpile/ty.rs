@@ -106,13 +106,10 @@ impl TypeMapper {
                 let inner = self.map_type(&a.element)?;
                 match &a.size {
                     Some(Expr::Lit(lit)) if lit.kind == LitKind::Integer => {
-                        let n: usize = lit.span.src().parse().map_err(|_| {
-                            TranspileError::UnsupportedType {
-                                message: format!("invalid array size literal `{}`", lit.span.src()),
-                                src: lit.span.full_source().to_owned(),
-                                err_span: lit.span.into(),
-                            }
-                        })?;
+                        let n: usize =
+                            lit.span.src().parse().map_err(|_| {
+                                unsupported_from_type("invalid array size literal", ty)
+                            })?;
                         let lit_n =
                             syn::LitInt::new(&n.to_string(), proc_macro2::Span::call_site());
                         Ok(syn::parse_quote!([#inner; #lit_n]))
@@ -159,11 +156,10 @@ impl TypeMapper {
                 }
                 Ok(result)
             }
-            Type::Auto(a) => Err(TranspileError::UnsupportedType {
-                message: "auto type cannot be mapped to Rust".to_owned(),
-                src: a.span.full_source().to_owned(),
-                err_span: a.span.into(),
-            }),
+            Type::Auto(_) => Err(unsupported_from_type(
+                "auto type cannot be mapped to Rust",
+                ty,
+            )),
             Type::Decltype(_) => Err(unsupported_from_type(
                 "decltype cannot be mapped to Rust",
                 ty,
@@ -271,11 +267,13 @@ fn unsupported_from_type(message: &str, ty: &Type<'_>) -> TranspileError {
     match type_span(ty) {
         Some(span) => TranspileError::UnsupportedType {
             message: message.to_owned(),
+            ty: format!("{ty:?}"),
             src: span.full_source().to_owned(),
             err_span: span.into(),
         },
         None => TranspileError::UnsupportedType {
             message: message.to_owned(),
+            ty: format!("{ty:?}"),
             src: String::new(),
             err_span: miette::SourceSpan::new(0.into(), 0),
         },
@@ -355,6 +353,7 @@ impl<'de> Transpile for ItemStatic<'de> {
             .as_ref()
             .ok_or_else(|| TranspileError::UnsupportedExpr {
                 message: "Rust statics require an initializer".to_owned(),
+                expr: "missing initializer".to_owned(),
                 src: name.span.full_source().to_owned(),
                 err_span: name.span.into(),
             })?;
