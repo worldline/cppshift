@@ -2,7 +2,10 @@ use proc_macro2::TokenStream;
 use quote::ToTokens;
 use syn::parse_str;
 
-use crate::ast::{Ident, Path};
+use crate::{
+    ast::{Ident, ItemEnum, Path},
+    transpile::{Transpile, TranspileError, Transpiler},
+};
 
 impl<'de> From<Ident<'de>> for syn::Ident {
     fn from(ident: Ident<'de>) -> Self {
@@ -37,3 +40,113 @@ macro_rules! impl_try_from_path {
     };
 }
 impl_try_from_path!(syn::Type, syn::Path, syn::Expr);
+
+impl<'de> Transpile for ItemEnum<'de> {
+    fn transpile(
+        &self,
+        transpiler: &Transpiler,
+        tokens: &mut TokenStream,
+    ) -> Result<(), TranspileError> {
+        let name: syn::Ident = self
+            .ident
+            .as_ref()
+            .ok_or_else(|| TranspileError::UnsupportedType {
+                message: "anonymous enums cannot be transpiled".to_owned(),
+                src: String::new(),
+                err_span: miette::SourceSpan::new(0.into(), 0),
+            })?
+            .into();
+
+        // Build #[repr(...)] if an underlying type is specified
+        let repr_attr = match &self.underlying_type {
+            Some(ty) => {
+                let rust_ty = transpiler.ty_mapper.map_type(ty)?;
+                Some(quote::quote! { #[repr(#rust_ty)] })
+            }
+            None => None,
+        };
+
+        // Build variant tokens
+        let mut variant_tokens = TokenStream::new();
+        for variant in self.variants.iter() {
+            let v_name: syn::Ident = (&variant.ident).into();
+            if let Some(ref disc) = variant.discriminant {
+                let mut expr_tokens = TokenStream::new();
+                disc.transpile(transpiler, &mut expr_tokens)?;
+                variant_tokens.extend(quote::quote! { #v_name = #expr_tokens, });
+            } else {
+                variant_tokens.extend(quote::quote! { #v_name, });
+            }
+        }
+
+        tokens.extend(quote::quote! {
+            #[doc = concat!(" Auto-transpiled enum for ", stringify!(#name))]
+            #repr_attr
+            pub enum #name { #variant_tokens }
+        });
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::parse_file;
+
+    // ---- ItemEnum transpilation ----
+
+    #[test]
+    fn enum_class_transpiles() -> Result<(), TranspileError> {
+        let transpiler = Transpiler::default();
+        let src = "enum class Color { Red, Green, Blue };";
+        let file = parse_file(src).unwrap();
+        match &file.items[0] {
+            crate::ast::Item::Enum(e) => {
+                assert_eq!(
+                    e.transpile_token_stream(&transpiler)?.to_string(),
+                    "pub enum Color { Red , Green , Blue , }"
+                );
+            }
+            item => panic!("expected ItemEnum, got {item:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn enum_with_underlying_type_transpiles() -> Result<(), TranspileError> {
+        let transpiler = Transpiler::default();
+        let src = "enum Color : int { Red, Green, Blue };";
+        let file = parse_file(src).unwrap();
+        match &file.items[0] {
+            crate::ast::Item::Enum(e) => {
+                assert_eq!(
+                    e.transpile_token_stream(&transpiler)?.to_string(),
+                    "# [repr (i32)] pub enum Color { Red , Green , Blue , }"
+                );
+            }
+            item => panic!("expected ItemEnum, got {item:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn enum_with_discriminants_transpiles() -> Result<(), TranspileError> {
+        let transpiler = Transpiler::default();
+        let src = "enum class Color : unsigned char { A = 1, B = 2 };";
+        let file = parse_file(src).unwrap();
+        match &file.items[0] {
+            crate::ast::Item::Enum(e) => {
+                assert_eq!(
+                    e.transpile_token_stream(&transpiler)?.to_string(),
+                    "# [repr (u8)] pub enum Color { A = 1 , B = 2 , }"
+                );
+            }
+            item => panic!("expected ItemEnum, got {item:?}"),
+        }
+
+        Ok(())
+    }
+}
