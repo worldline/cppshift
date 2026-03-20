@@ -41,12 +41,13 @@ impl<'de> Transpile for Expr<'de> {
     ) -> Result<(), TranspileError> {
         match self {
             Expr::Lit(lit) => {
-                let rust_expr: syn::Expr =
-                    syn::parse_str(lit.span.src()).map_err(|_| TranspileError::UnsupportedExpr {
+                let rust_expr: syn::Expr = syn::parse_str(lit.span.src()).map_err(|_| {
+                    TranspileError::UnsupportedExpr {
                         message: format!("cannot parse literal `{}`", lit.span.src()),
                         src: lit.span.full_source().to_owned(),
                         err_span: lit.span.into(),
-                    })?;
+                    }
+                })?;
                 tokens.extend(quote::quote!(#rust_expr));
             }
             Expr::Bool(ExprBool { value, .. }) => {
@@ -59,9 +60,8 @@ impl<'de> Transpile for Expr<'de> {
                 i.ident.to_tokens(tokens);
             }
             Expr::Path(p) => {
-                let rust_expr = syn::Expr::try_from(p.path.clone()).map_err(|_| {
-                    unsupported_from_expr("cannot transpile path expression", self)
-                })?;
+                let rust_expr = syn::Expr::try_from(p.path.clone())
+                    .map_err(|_| unsupported_from_expr("cannot transpile path expression", self))?;
                 tokens.extend(quote::quote!(#rust_expr));
             }
             Expr::Unary(ExprUnary {

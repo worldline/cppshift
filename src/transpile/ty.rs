@@ -350,11 +350,14 @@ impl<'de> Transpile for ItemStatic<'de> {
     ) -> Result<(), TranspileError> {
         let name = self.ident;
         let rust_ty = transpiler.ty_mapper.map_type(&self.ty)?;
-        let expr = self.expr.as_ref().ok_or_else(|| TranspileError::UnsupportedExpr {
-            message: "Rust statics require an initializer".to_owned(),
-            src: name.span.full_source().to_owned(),
-            err_span: name.span.into(),
-        })?;
+        let expr = self
+            .expr
+            .as_ref()
+            .ok_or_else(|| TranspileError::UnsupportedExpr {
+                message: "Rust statics require an initializer".to_owned(),
+                src: name.span.full_source().to_owned(),
+                err_span: name.span.into(),
+            })?;
         let mut expr_tokens = TokenStream::new();
         expr.transpile(transpiler, &mut expr_tokens)?;
         tokens.extend(quote::quote! {
