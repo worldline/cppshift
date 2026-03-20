@@ -267,13 +267,11 @@ fn unsupported_from_type(message: &str, ty: &Type<'_>) -> TranspileError {
     match type_span(ty) {
         Some(span) => TranspileError::UnsupportedType {
             message: message.to_owned(),
-            ty: format!("{ty:?}"),
             src: span.full_source().to_owned(),
             err_span: span.into(),
         },
         None => TranspileError::UnsupportedType {
             message: message.to_owned(),
-            ty: format!("{ty:?}"),
             src: String::new(),
             err_span: miette::SourceSpan::new(0.into(), 0),
         },
@@ -353,7 +351,6 @@ impl<'de> Transpile for ItemStatic<'de> {
             .as_ref()
             .ok_or_else(|| TranspileError::UnsupportedExpr {
                 message: "Rust statics require an initializer".to_owned(),
-                expr: "missing initializer".to_owned(),
                 src: name.span.full_source().to_owned(),
                 err_span: name.span.into(),
             })?;

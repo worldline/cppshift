@@ -21,13 +21,11 @@ pub(crate) fn unsupported_from_expr(message: &str, expr: &Expr<'_>) -> Transpile
     match expr_span(expr) {
         Some(span) => TranspileError::UnsupportedExpr {
             message: message.to_owned(),
-            expr: format!("{expr:?}"),
             src: span.full_source().to_owned(),
             err_span: span.into(),
         },
         None => TranspileError::UnsupportedExpr {
             message: message.to_owned(),
-            expr: format!("{expr:?}"),
             src: String::new(),
             err_span: miette::SourceSpan::new(0.into(), 0),
         },
@@ -46,7 +44,6 @@ impl<'de> Transpile for Expr<'de> {
                 let rust_expr: syn::Expr = syn::parse_str(lit.span.src()).map_err(|_| {
                     TranspileError::UnsupportedExpr {
                         message: "cannot parse literal".to_owned(),
-                        expr: lit.span.src().to_owned(),
                         src: lit.span.full_source().to_owned(),
                         err_span: lit.span.into(),
                     }

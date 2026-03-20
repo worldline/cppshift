@@ -16,20 +16,18 @@ pub enum TranspileError {
         err_span: miette::SourceSpan,
     },
     /// C++ type variant cannot be mapped to Rust
-    #[error("{message}: `{ty}`")]
+    #[error("{message}")]
     UnsupportedType {
         message: String,
-        ty: String,
         #[source_code]
         src: String,
         #[label = "{message}"]
         err_span: miette::SourceSpan,
     },
     /// C++ expression cannot be transpiled to Rust
-    #[error("{message}: `{expr}`")]
+    #[error("{message}")]
     UnsupportedExpr {
         message: String,
-        expr: String,
         #[source_code]
         src: String,
         #[label = "{message}"]
