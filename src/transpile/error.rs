@@ -16,7 +16,7 @@ pub enum TranspileError {
         err_span: miette::SourceSpan,
     },
     /// C++ type variant cannot be mapped to Rust
-    #[error("{message}")]
+    #[error("{message}: `{ty}`")]
     UnsupportedType {
         message: String,
         ty: String,
@@ -26,7 +26,7 @@ pub enum TranspileError {
         err_span: miette::SourceSpan,
     },
     /// C++ expression cannot be transpiled to Rust
-    #[error("{message}")]
+    #[error("{message}: `{expr}`")]
     UnsupportedExpr {
         message: String,
         expr: String,
