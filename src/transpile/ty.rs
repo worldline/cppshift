@@ -5,7 +5,7 @@ use serde::Deserialize;
 use serde::de::{self, MapAccess, Visitor};
 
 use crate::ast::ItemTypedef;
-use crate::ast::expr::{Expr, LitKind};
+use crate::ast::expr::{Expr, ExprLit, LitKind};
 use crate::ast::item::{ItemConst, ItemStatic, Path};
 use crate::ast::ty::{FundamentalKind, TemplateArg, Type};
 use crate::transpile::expr::expr_span;
@@ -320,6 +320,115 @@ impl<'de> Transpile for ItemTypedef<'de> {
     }
 }
 
+/// Returns `true` if `ty` is a byte-sized char type (char, char8_t, unsigned char, signed char),
+/// stripping CV-qualifiers.
+fn is_char_element_type(ty: &Type<'_>) -> bool {
+    use FundamentalKind::*;
+    match ty {
+        Type::Fundamental(f) => matches!(f.kind, Char | Char8 | UnsignedChar | SignedChar),
+        Type::Qualified(q) => is_char_element_type(&q.ty),
+        _ => false,
+    }
+}
+
+/// Count the number of code units in the raw content of a C string literal
+/// (text between the outer quotes), handling escape sequences.
+fn count_c_string_chars(inner: &str) -> usize {
+    let bytes = inner.as_bytes();
+    let mut count = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\\' {
+            i += 1;
+            match bytes.get(i) {
+                Some(b'x') => {
+                    // \xNN — skip x + up to 2 hex digits
+                    i += 1;
+                    let mut n = 0;
+                    while n < 2 && bytes.get(i).is_some_and(|b| b.is_ascii_hexdigit()) {
+                        i += 1;
+                        n += 1;
+                    }
+                }
+                Some(b'u') => i += 5, // \uNNNN
+                Some(b'U') => i += 9, // \UNNNNNNNN
+                Some(b'0'..=b'7') => {
+                    // \NNN — skip first octal digit + up to 2 more
+                    i += 1;
+                    let mut n = 0;
+                    while n < 2 && bytes.get(i).is_some_and(|b| matches!(b, b'0'..=b'7')) {
+                        i += 1;
+                        n += 1;
+                    }
+                }
+                _ => i += 1, // \n, \t, \\, \", etc.
+            }
+        } else {
+            i += 1;
+        }
+        count += 1;
+    }
+    count
+}
+
+/// Try to transpile an unsized char array initialised with a string literal.
+///
+/// C++: `const char foo[] = "ALPN";` / `static char foo[] = "ALPN";`
+/// Rust: `pub static foo: [u8; 5] = *b"ALPN\0";`
+///
+/// `keyword` is the Rust storage keyword to emit (`const` or `static`).
+/// Returns `None` if the pattern doesn't match and normal mapping should proceed.
+fn try_transpile_char_array_from_str_lit<'de>(
+    name: crate::ast::item::Ident<'de>,
+    element: &Type<'de>,
+    expr: &Expr<'de>,
+    transpiler: &Transpiler,
+    keyword: &str,
+    tokens: &mut TokenStream,
+) -> Option<Result<(), TranspileError>> {
+    if !is_char_element_type(element) {
+        return None;
+    }
+    let Expr::Lit(ExprLit {
+        span,
+        kind: LitKind::String,
+    }) = expr
+    else {
+        return None;
+    };
+
+    let raw = span.src(); // e.g. `"ALPN"` (including surrounding quotes)
+    if raw.len() < 2 {
+        return None;
+    }
+    let inner = &raw[1..raw.len() - 1]; // strip surrounding quotes
+    let len = count_c_string_chars(inner) + 1; // +1 for null terminator
+    let elem_ty = match transpiler.ty_mapper.map_type(element) {
+        Ok(t) => t,
+        Err(e) => return Some(Err(e)),
+    };
+    let lit_n = syn::LitInt::new(&len.to_string(), proc_macro2::Span::call_site());
+
+    // Build `*b"...\0"` by inserting `\0` before the closing quote.
+    let byte_expr_src = format!("*b{}\\0\"", &raw[..raw.len() - 1]);
+    let byte_expr: syn::Expr = match syn::parse_str(&byte_expr_src) {
+        Ok(e) => e,
+        Err(_) => {
+            return Some(Err(TranspileError::UnsupportedExpr {
+                message: format!("cannot convert C++ string literal `{raw}` to Rust byte string"),
+                src: span.full_source().to_owned(),
+                err_span: (*span).into(),
+            }));
+        }
+    };
+
+    let keyword_tok: proc_macro2::TokenStream = keyword.parse().unwrap();
+    tokens.extend(quote::quote! {
+        pub #keyword_tok #name: [#elem_ty; #lit_n] = #byte_expr;
+    });
+    Some(Ok(()))
+}
+
 impl<'de> Transpile for ItemConst<'de> {
     fn transpile(
         &self,
@@ -327,6 +436,22 @@ impl<'de> Transpile for ItemConst<'de> {
         tokens: &mut TokenStream,
     ) -> Result<(), TranspileError> {
         let name = self.ident;
+
+        // Special case: `const char foo[] = "ALPN";` → `pub const foo: [u8; 5] = *b"ALPN\0";`
+        if let Type::Array(arr) = &self.ty
+            && arr.size.is_none()
+            && let Some(result) = try_transpile_char_array_from_str_lit(
+                name,
+                &arr.element,
+                &self.expr,
+                transpiler,
+                "const",
+                tokens,
+            )
+        {
+            return result;
+        }
+
         let rust_ty = transpiler.ty_mapper.map_type(&self.ty)?;
         let mut expr_tokens = TokenStream::new();
         self.expr.transpile(transpiler, &mut expr_tokens)?;
@@ -345,7 +470,6 @@ impl<'de> Transpile for ItemStatic<'de> {
         tokens: &mut TokenStream,
     ) -> Result<(), TranspileError> {
         let name = self.ident;
-        let rust_ty = transpiler.ty_mapper.map_type(&self.ty)?;
         let expr = self
             .expr
             .as_ref()
@@ -354,6 +478,23 @@ impl<'de> Transpile for ItemStatic<'de> {
                 src: name.span.full_source().to_owned(),
                 err_span: name.span.into(),
             })?;
+
+        // Special case: `static char foo[] = "ALPN";` → `pub static foo: [u8; 5] = *b"ALPN\0";`
+        if let Type::Array(arr) = &self.ty
+            && arr.size.is_none()
+            && let Some(result) = try_transpile_char_array_from_str_lit(
+                name,
+                &arr.element,
+                expr,
+                transpiler,
+                "static",
+                tokens,
+            )
+        {
+            return result;
+        }
+
+        let rust_ty = transpiler.ty_mapper.map_type(&self.ty)?;
         let mut expr_tokens = TokenStream::new();
         expr.transpile(transpiler, &mut expr_tokens)?;
         tokens.extend(quote::quote! {
@@ -871,6 +1012,41 @@ mod tests {
             }
             item => panic!("expected ItemStatic, got {item:?}"),
         }
+        Ok(())
+    }
+
+    #[test]
+    fn char_array_from_string_literal() -> Result<(), TranspileError> {
+        // `const char` is parsed as a static with a const-qualified element type.
+        // The transpiler should infer the size (4 chars + null terminator = 5).
+        let transpiler = Transpiler::default();
+        let src = r#"const char listOfChars[] = "ALPN";"#;
+        let file = parse_file(src).unwrap();
+        match &file.items[0] {
+            crate::ast::Item::Static(s) => {
+                let out = s.transpile_token_stream(&transpiler)?.to_string();
+                assert_eq!(out, r#"pub static listOfChars : [u8 ; 5] = * b"ALPN\0" ;"#);
+            }
+            item => panic!("expected ItemStatic, got {item:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn char_array_with_escape_sequence() -> Result<(), TranspileError> {
+        // `\n` counts as one character: size = 3 + 1 = 4.
+        let transpiler = Transpiler::default();
+        let src = r#"const char nl[] = "a\nb";"#;
+        let file = parse_file(src).unwrap();
+        match &file.items[0] {
+            crate::ast::Item::Static(s) => {
+                let out = s.transpile_token_stream(&transpiler)?.to_string();
+                assert_eq!(out, r#"pub static nl : [u8 ; 4] = * b"a\nb\0" ;"#);
+            }
+            item => panic!("expected ItemStatic, got {item:?}"),
+        }
+
         Ok(())
     }
 
