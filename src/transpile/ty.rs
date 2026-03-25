@@ -452,12 +452,30 @@ impl<'de> Transpile for ItemConst<'de> {
             return result;
         }
 
-        let rust_ty = transpiler.ty_mapper.map_type(&self.ty)?;
         let mut expr_tokens = TokenStream::new();
         self.expr.transpile(transpiler, &mut expr_tokens)?;
-        tokens.extend(quote::quote! {
-            pub const #name: #rust_ty = #expr_tokens;
-        });
+
+        match &self.expr {
+            // C++ string constants with string literal init → `&str`
+            Expr::Lit(ExprLit { kind: LitKind::String, .. }) => {
+                tokens.extend(quote::quote! {
+                    pub const #name: &str = #expr_tokens;
+                });
+            }
+            // Rust char literals are type `char`, but C++ char maps to i8/u8.
+            Expr::Lit(ExprLit { kind: LitKind::Char, .. }) => {
+                let rust_ty = transpiler.ty_mapper.map_type(&self.ty)?;
+                tokens.extend(quote::quote! {
+                    pub const #name: #rust_ty = #expr_tokens as #rust_ty;
+                });
+            }
+            _ => {
+                let rust_ty = transpiler.ty_mapper.map_type(&self.ty)?;
+                tokens.extend(quote::quote! {
+                    pub const #name: #rust_ty = #expr_tokens;
+                });
+            }
+        }
 
         Ok(())
     }
@@ -494,12 +512,28 @@ impl<'de> Transpile for ItemStatic<'de> {
             return result;
         }
 
-        let rust_ty = transpiler.ty_mapper.map_type(&self.ty)?;
         let mut expr_tokens = TokenStream::new();
         expr.transpile(transpiler, &mut expr_tokens)?;
-        tokens.extend(quote::quote! {
-            pub static #name: #rust_ty = #expr_tokens;
-        });
+
+        match expr {
+            Expr::Lit(ExprLit { kind: LitKind::String, .. }) => {
+                tokens.extend(quote::quote! {
+                    pub static #name: &str = #expr_tokens;
+                });
+            }
+            Expr::Lit(ExprLit { kind: LitKind::Char, .. }) => {
+                let rust_ty = transpiler.ty_mapper.map_type(&self.ty)?;
+                tokens.extend(quote::quote! {
+                    pub static #name: #rust_ty = #expr_tokens as #rust_ty;
+                });
+            }
+            _ => {
+                let rust_ty = transpiler.ty_mapper.map_type(&self.ty)?;
+                tokens.extend(quote::quote! {
+                    pub static #name: #rust_ty = #expr_tokens;
+                });
+            }
+        }
 
         Ok(())
     }
@@ -991,6 +1025,40 @@ mod tests {
                 assert_eq!(
                     c.transpile_token_stream(&transpiler)?.to_string(),
                     "pub const FLAG : bool = true ;"
+                );
+            }
+            item => panic!("expected ItemConst, got {item:?}"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn const_char_literal_casts() -> Result<(), TranspileError> {
+        let transpiler = Transpiler::default();
+        let src = "constexpr char CONST_CHAR_VALUE = 'W';";
+        let file = parse_file(src).unwrap();
+        match &file.items[0] {
+            crate::ast::Item::Const(c) => {
+                assert_eq!(
+                    c.transpile_token_stream(&transpiler)?.to_string(),
+                    "pub const CONST_CHAR_VALUE : u8 = 'W' as u8 ;"
+                );
+            }
+            item => panic!("expected ItemConst, got {item:?}"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn const_string_uses_str_ref() -> Result<(), TranspileError> {
+        let transpiler = Transpiler::default();
+        let src = r#"constexpr string WRONG_RETURN_CODE = "404";"#;
+        let file = parse_file(src).unwrap();
+        match &file.items[0] {
+            crate::ast::Item::Const(c) => {
+                assert_eq!(
+                    c.transpile_token_stream(&transpiler)?.to_string(),
+                    r#"pub const WRONG_RETURN_CODE : & str = "404" ;"#
                 );
             }
             item => panic!("expected ItemConst, got {item:?}"),

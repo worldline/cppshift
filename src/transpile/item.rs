@@ -105,7 +105,7 @@ mod tests {
             crate::ast::Item::Enum(e) => {
                 assert_eq!(
                     e.transpile_token_stream(&transpiler)?.to_string(),
-                    "pub enum Color { Red , Green , Blue , }"
+                    "# [doc = concat ! (\" Auto-transpiled enum for \" , stringify ! (Color))] pub enum Color { Red , Green , Blue , }"
                 );
             }
             item => panic!("expected ItemEnum, got {item:?}"),
@@ -123,7 +123,7 @@ mod tests {
             crate::ast::Item::Enum(e) => {
                 assert_eq!(
                     e.transpile_token_stream(&transpiler)?.to_string(),
-                    "# [repr (i32)] pub enum Color { Red , Green , Blue , }"
+                    "# [doc = concat ! (\" Auto-transpiled enum for \" , stringify ! (Color))] # [repr (i32)] pub enum Color { Red , Green , Blue , }"
                 );
             }
             item => panic!("expected ItemEnum, got {item:?}"),
@@ -141,7 +141,7 @@ mod tests {
             crate::ast::Item::Enum(e) => {
                 assert_eq!(
                     e.transpile_token_stream(&transpiler)?.to_string(),
-                    "# [repr (u8)] pub enum Color { A = 1 , B = 2 , }"
+                    "# [doc = concat ! (\" Auto-transpiled enum for \" , stringify ! (Color))] # [repr (u8)] pub enum Color { A = 1 , B = 2 , }"
                 );
             }
             item => panic!("expected ItemEnum, got {item:?}"),
