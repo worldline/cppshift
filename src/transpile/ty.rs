@@ -433,19 +433,11 @@ impl<'de> Transpile for ItemConst<'de> {
                     });
                 }
             }
-            // Rust known type (no need for a `#from`)
-            Expr::Bool(..) => {
-                let rust_ty = transpiler.ty_mapper.map_type(&self.ty)?;
-                tokens.extend(quote::quote! {
-                    #[doc = concat!(" Auto-transpiled const ", stringify!(#rust_ty))]
-                    pub const #name: #rust_ty = #expr_tokens;
-                });
-            }
             _ => {
                 let rust_ty = transpiler.ty_mapper.map_type(&self.ty)?;
                 tokens.extend(quote::quote! {
                     #[doc = concat!(" Auto-transpiled const ", stringify!(#rust_ty))]
-                    pub const #name: #rust_ty = #rust_ty::from(#expr_tokens);
+                    pub const #name: #rust_ty = #expr_tokens;
                 });
             }
         }
@@ -513,19 +505,11 @@ impl<'de> Transpile for ItemStatic<'de> {
                     });
                 }
             }
-            // Rust known type (no need for a `#from`)
-            Expr::Bool(..) => {
-                let rust_ty = transpiler.ty_mapper.map_type(&self.ty)?;
-                tokens.extend(quote::quote! {
-                    #[doc = concat!(" Auto-transpiled static ", stringify!(#rust_ty))]
-                    pub static #name: #rust_ty = #rust_ty::from(#expr_tokens);
-                });
-            }
             _ => {
                 let rust_ty = transpiler.ty_mapper.map_type(&self.ty)?;
                 tokens.extend(quote::quote! {
                     #[doc = concat!(" Auto-transpiled static ", stringify!(#rust_ty))]
-                    pub static #name: #rust_ty = #rust_ty::from(#expr_tokens);
+                    pub static #name: #rust_ty = #expr_tokens;
                 });
             }
         }
