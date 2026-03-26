@@ -3,15 +3,9 @@ use quote::ToTokens;
 use syn::parse_str;
 
 use crate::{
-    ast::{Ident, ItemEnum, Path},
+    ast::{Ident, ItemEnum, Path, Visibility},
     transpile::{Transpile, TranspileError, Transpiler},
 };
-
-impl<'de> From<Ident<'de>> for syn::Ident {
-    fn from(ident: Ident<'de>) -> Self {
-        syn::Ident::new(ident.sym, proc_macro2::Span::call_site())
-    }
-}
 
 impl<'de> From<&Ident<'de>> for syn::Ident {
     fn from(ident: &Ident<'de>) -> Self {
@@ -19,10 +13,41 @@ impl<'de> From<&Ident<'de>> for syn::Ident {
     }
 }
 
+impl<'de> From<Ident<'de>> for syn::Ident {
+    fn from(ident: Ident<'de>) -> Self {
+        Self::from(&ident)
+    }
+}
+
 impl<'de> ToTokens for Ident<'de> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let ident: syn::Ident = self.into();
         ident.to_tokens(tokens);
+    }
+}
+
+impl From<&Visibility> for syn::Visibility {
+    fn from(visibility: &Visibility) -> Self {
+        match visibility {
+            Visibility::Public => syn::parse_str("pub").expect("Failed to parse pub visibility"),
+            Visibility::Protected => {
+                syn::parse_str("pub(crate)").expect("Failed to parse pub(crate) visibility")
+            }
+            Visibility::Inherited | Visibility::Private => syn::Visibility::Inherited,
+        }
+    }
+}
+
+impl From<Visibility> for syn::Visibility {
+    fn from(visibility: Visibility) -> Self {
+        Self::from(&visibility)
+    }
+}
+
+impl ToTokens for Visibility {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        let visibility: syn::Visibility = self.into();
+        visibility.to_tokens(tokens);
     }
 }
 

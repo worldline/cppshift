@@ -24,6 +24,12 @@ pub struct Ident<'de> {
     pub span: SourceSpan<'de>,
 }
 
+impl<'de> fmt::Display for Ident<'de> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.sym)
+    }
+}
+
 /// Visibility of a declaration.
 ///
 /// In C++, visibility applies within class/struct bodies via access specifiers.
