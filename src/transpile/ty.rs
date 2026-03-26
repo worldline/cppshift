@@ -570,6 +570,7 @@ mod tests {
             ty_mapper: TypeMapper::builder()
                 .map_path("std::string", "BytesMut")?
                 .build(),
+            ..Default::default()
         };
 
         let typedef_header = r#"

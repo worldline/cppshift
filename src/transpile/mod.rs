@@ -5,6 +5,8 @@ pub mod expr;
 pub mod item;
 pub mod ty;
 
+use std::collections::HashSet;
+
 pub use error::TranspileError;
 use proc_macro2::TokenStream;
 use serde::Deserialize;
@@ -13,6 +15,11 @@ pub use ty::*;
 /// Transpiler struct, which is the configuration entrypoint for all transpilation operations.
 #[derive(Debug, Default, Clone, Deserialize)]
 pub struct Transpiler {
+    /// List of type we don't want to transpile
+    #[serde(default)]
+    pub skip_types: HashSet<String>,
+    /// Type mapper to map C++ types to Rust types
+    #[serde(default)]
     pub ty_mapper: TypeMapper,
 }
 
