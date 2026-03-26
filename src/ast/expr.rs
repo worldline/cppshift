@@ -3,6 +3,7 @@
 //! Analogous to `syn::Expr`.
 
 use crate::SourceSpan;
+use crate::ast::ty::{FundamentalKind, Type};
 
 use super::item::{Ident, Path};
 use super::punct::Punctuated;
@@ -14,6 +15,49 @@ pub enum LitKind {
     Float,
     String,
     Char,
+}
+
+impl LitKind {
+    /// Check if the fundamental kind matches the literal kind
+    pub fn match_fundamental(&self, kind: FundamentalKind) -> bool {
+        match self {
+            LitKind::Integer => matches!(
+                kind,
+                FundamentalKind::Short
+                    | FundamentalKind::Int
+                    | FundamentalKind::Long
+                    | FundamentalKind::LongLong
+                    | FundamentalKind::SignedChar
+                    | FundamentalKind::UnsignedChar
+                    | FundamentalKind::UnsignedShort
+                    | FundamentalKind::UnsignedInt
+                    | FundamentalKind::UnsignedLong
+                    | FundamentalKind::UnsignedLongLong
+            ),
+            LitKind::Float => matches!(
+                kind,
+                FundamentalKind::Float | FundamentalKind::Double | FundamentalKind::LongDouble
+            ),
+            LitKind::Char => matches!(
+                kind,
+                FundamentalKind::Char
+                    | FundamentalKind::Wchar
+                    | FundamentalKind::Char8
+                    | FundamentalKind::Char16
+                    | FundamentalKind::Char32
+            ),
+            _ => false,
+        }
+    }
+
+    /// Check if the literal kind matches the type
+    pub fn match_type(&self, ty: &Type) -> bool {
+        match ty {
+            Type::Fundamental(fund) => self.match_fundamental(fund.kind),
+            Type::Qualified(qualified) => self.match_type(&qualified.ty),
+            _ => false,
+        }
+    }
 }
 
 /// Unary operator.

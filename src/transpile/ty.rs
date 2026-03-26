@@ -19,9 +19,10 @@ impl From<FundamentalKind> for syn::Type {
         let s = match kind {
             Void => "()",
             Bool => "bool",
-            Char | Char8 | UnsignedChar => "u8",
-            Char16 | UnsignedShort => "u16",
-            Char32 | Wchar | UnsignedInt => "u32",
+            Char | Char8 | Char16 | Char32 | Wchar => "char",
+            UnsignedChar => "u8",
+            UnsignedShort => "u16",
+            UnsignedInt => "u32",
             Short => "i16",
             Int => "i32",
             Long | LongLong => "i64",
@@ -302,7 +303,15 @@ impl<'de> Transpile for ItemTypedef<'de> {
         tokens: &mut TokenStream,
     ) -> Result<(), TranspileError> {
         let name = self.ident;
-        if let Type::Path(p) = &self.ty {
+        // char array typedefs → &str
+        if let Type::Array(arr) = &self.ty
+            && is_char_element_type(&arr.element)
+        {
+            tokens.extend(quote::quote! {
+                #[doc = concat!(" Auto-transpiled type for ", stringify!(#name))]
+                pub type #name = &str;
+            });
+        } else if let Type::Path(p) = &self.ty {
             let rust_ty = transpiler.ty_mapper.resolve_path(&p.path)?;
             tokens.extend(quote::quote! {
                 #[doc = concat!(" Auto-transpiled type for ", stringify!(#name))]
@@ -325,56 +334,16 @@ impl<'de> Transpile for ItemTypedef<'de> {
 fn is_char_element_type(ty: &Type<'_>) -> bool {
     use FundamentalKind::*;
     match ty {
-        Type::Fundamental(f) => matches!(f.kind, Char | Char8 | UnsignedChar | SignedChar),
+        Type::Fundamental(f) => matches!(f.kind, Char | Char8 | Char16 | Char32 | Wchar),
         Type::Qualified(q) => is_char_element_type(&q.ty),
         _ => false,
     }
 }
 
-/// Count the number of code units in the raw content of a C string literal
-/// (text between the outer quotes), handling escape sequences.
-fn count_c_string_chars(inner: &str) -> usize {
-    let bytes = inner.as_bytes();
-    let mut count = 0;
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'\\' {
-            i += 1;
-            match bytes.get(i) {
-                Some(b'x') => {
-                    // \xNN — skip x + up to 2 hex digits
-                    i += 1;
-                    let mut n = 0;
-                    while n < 2 && bytes.get(i).is_some_and(|b| b.is_ascii_hexdigit()) {
-                        i += 1;
-                        n += 1;
-                    }
-                }
-                Some(b'u') => i += 5, // \uNNNN
-                Some(b'U') => i += 9, // \UNNNNNNNN
-                Some(b'0'..=b'7') => {
-                    // \NNN — skip first octal digit + up to 2 more
-                    i += 1;
-                    let mut n = 0;
-                    while n < 2 && bytes.get(i).is_some_and(|b| matches!(b, b'0'..=b'7')) {
-                        i += 1;
-                        n += 1;
-                    }
-                }
-                _ => i += 1, // \n, \t, \\, \", etc.
-            }
-        } else {
-            i += 1;
-        }
-        count += 1;
-    }
-    count
-}
-
 /// Try to transpile an unsized char array initialised with a string literal.
 ///
 /// C++: `const char foo[] = "ALPN";` / `static char foo[] = "ALPN";`
-/// Rust: `pub static foo: [u8; 5] = *b"ALPN\0";`
+/// Rust: `pub static foo: &str = "ALPN";`
 ///
 /// `keyword` is the Rust storage keyword to emit (`const` or `static`).
 /// Returns `None` if the pattern doesn't match and normal mapping should proceed.
@@ -390,41 +359,21 @@ fn try_transpile_char_array_from_str_lit<'de>(
         return None;
     }
     let Expr::Lit(ExprLit {
-        span,
         kind: LitKind::String,
+        ..
     }) = expr
     else {
         return None;
     };
 
-    let raw = span.src(); // e.g. `"ALPN"` (including surrounding quotes)
-    if raw.len() < 2 {
-        return None;
+    let mut expr_tokens = TokenStream::new();
+    if let Err(e) = expr.transpile(transpiler, &mut expr_tokens) {
+        return Some(Err(e));
     }
-    let inner = &raw[1..raw.len() - 1]; // strip surrounding quotes
-    let len = count_c_string_chars(inner) + 1; // +1 for null terminator
-    let elem_ty = match transpiler.ty_mapper.map_type(element) {
-        Ok(t) => t,
-        Err(e) => return Some(Err(e)),
-    };
-    let lit_n = syn::LitInt::new(&len.to_string(), proc_macro2::Span::call_site());
-
-    // Build `*b"...\0"` by inserting `\0` before the closing quote.
-    let byte_expr_src = format!("*b{}\\0\"", &raw[..raw.len() - 1]);
-    let byte_expr: syn::Expr = match syn::parse_str(&byte_expr_src) {
-        Ok(e) => e,
-        Err(_) => {
-            return Some(Err(TranspileError::UnsupportedExpr {
-                message: format!("cannot convert C++ string literal `{raw}` to Rust byte string"),
-                src: span.full_source().to_owned(),
-                err_span: (*span).into(),
-            }));
-        }
-    };
 
     let keyword_tok: proc_macro2::TokenStream = keyword.parse().unwrap();
     tokens.extend(quote::quote! {
-        pub #keyword_tok #name: [#elem_ty; #lit_n] = #byte_expr;
+        pub #keyword_tok #name: &str = #expr_tokens;
     });
     Some(Ok(()))
 }
@@ -457,22 +406,46 @@ impl<'de> Transpile for ItemConst<'de> {
 
         match &self.expr {
             // C++ string constants with string literal init → `&str`
-            Expr::Lit(ExprLit { kind: LitKind::String, .. }) => {
+            Expr::Lit(ExprLit {
+                kind: LitKind::String,
+                ..
+            }) => {
                 tokens.extend(quote::quote! {
+                    #[doc = " Auto-transpiled &str const"]
                     pub const #name: &str = #expr_tokens;
                 });
             }
-            // Rust char literals are type `char`, but C++ char maps to i8/u8.
-            Expr::Lit(ExprLit { kind: LitKind::Char, .. }) => {
+            Expr::Lit(ExprLit { kind, .. }) => {
+                let rust_ty = transpiler.ty_mapper.map_type(&self.ty)?;
+                if kind.match_type(&self.ty) {
+                    println!(
+                        "Warning: literal kind {:?} does not match fundamental type {:?}, inserting cast",
+                        kind, self.ty
+                    );
+                    tokens.extend(quote::quote! {
+                        #[doc = concat!(" Auto-transpiled const literal ", stringify!(#rust_ty))]
+                        pub const #name: #rust_ty = #expr_tokens;
+                    });
+                } else {
+                    tokens.extend(quote::quote! {
+                        #[doc = concat!(" Auto-transpiled const literal ", stringify!(#rust_ty))]
+                        pub const #name: #rust_ty = #expr_tokens as #rust_ty;
+                    });
+                }
+            }
+            // Rust known type (no need for a `#from`)
+            Expr::Bool(..) => {
                 let rust_ty = transpiler.ty_mapper.map_type(&self.ty)?;
                 tokens.extend(quote::quote! {
-                    pub const #name: #rust_ty = #expr_tokens as #rust_ty;
+                    #[doc = concat!(" Auto-transpiled const ", stringify!(#rust_ty))]
+                    pub const #name: #rust_ty = #expr_tokens;
                 });
             }
             _ => {
                 let rust_ty = transpiler.ty_mapper.map_type(&self.ty)?;
                 tokens.extend(quote::quote! {
-                    pub const #name: #rust_ty = #expr_tokens;
+                    #[doc = concat!(" Auto-transpiled const ", stringify!(#rust_ty))]
+                    pub const #name: #rust_ty = #rust_ty::from(#expr_tokens);
                 });
             }
         }
@@ -516,21 +489,43 @@ impl<'de> Transpile for ItemStatic<'de> {
         expr.transpile(transpiler, &mut expr_tokens)?;
 
         match expr {
-            Expr::Lit(ExprLit { kind: LitKind::String, .. }) => {
+            // C++ string statics with string literal init → `&str`
+            Expr::Lit(ExprLit {
+                kind: LitKind::String,
+                ..
+            }) => {
                 tokens.extend(quote::quote! {
+                    #[doc = " Auto-transpiled &str static"]
                     pub static #name: &str = #expr_tokens;
                 });
             }
-            Expr::Lit(ExprLit { kind: LitKind::Char, .. }) => {
+            Expr::Lit(ExprLit { kind, .. }) => {
+                let rust_ty = transpiler.ty_mapper.map_type(&self.ty)?;
+                if kind.match_type(&self.ty) {
+                    tokens.extend(quote::quote! {
+                        #[doc = concat!(" Auto-transpiled static literal ", stringify!(#rust_ty))]
+                        pub static #name: #rust_ty = #expr_tokens;
+                    });
+                } else {
+                    tokens.extend(quote::quote! {
+                        #[doc = concat!(" Auto-transpiled static literal ", stringify!(#rust_ty))]
+                        pub static #name: #rust_ty = #expr_tokens as #rust_ty;
+                    });
+                }
+            }
+            // Rust known type (no need for a `#from`)
+            Expr::Bool(..) => {
                 let rust_ty = transpiler.ty_mapper.map_type(&self.ty)?;
                 tokens.extend(quote::quote! {
-                    pub static #name: #rust_ty = #expr_tokens as #rust_ty;
+                    #[doc = concat!(" Auto-transpiled static ", stringify!(#rust_ty))]
+                    pub static #name: #rust_ty = #rust_ty::from(#expr_tokens);
                 });
             }
             _ => {
                 let rust_ty = transpiler.ty_mapper.map_type(&self.ty)?;
                 tokens.extend(quote::quote! {
-                    pub static #name: #rust_ty = #expr_tokens;
+                    #[doc = concat!(" Auto-transpiled static ", stringify!(#rust_ty))]
+                    pub static #name: #rust_ty = #rust_ty::from(#expr_tokens);
                 });
             }
         }
@@ -625,7 +620,7 @@ mod tests {
         match typedef_iter.next() {
             Some(crate::ast::Item::Typedef(t)) => {
                 assert_eq!(
-                    "# [doc = concat ! (\" Auto-transpiled type for \" , stringify ! (type24))] pub type type24 = [u8 ; 3] ;",
+                    "# [doc = concat ! (\" Auto-transpiled type for \" , stringify ! (type24))] pub type type24 = & str ;",
                     t.transpile_token_stream(&transpiler)?.to_string()
                 );
             }
@@ -644,11 +639,11 @@ mod tests {
         let cases: &[(FundamentalKind, &str, &str)] = &[
             (Void, "void", "()"),
             (Bool, "bool", "bool"),
-            (Char, "char", "u8"),
-            (Char8, "char8_t", "u8"),
-            (Char16, "char16_t", "u16"),
-            (Char32, "char32_t", "u32"),
-            (Wchar, "wchar_t", "u32"),
+            (Char, "char", "char"),
+            (Char8, "char8_t", "char"),
+            (Char16, "char16_t", "char"),
+            (Char32, "char32_t", "char"),
+            (Wchar, "wchar_t", "char"),
             (Short, "short", "i16"),
             (Int, "int", "i32"),
             (Long, "long", "i64"),
@@ -990,7 +985,7 @@ mod tests {
             crate::ast::Item::Const(c) => {
                 assert_eq!(
                     c.transpile_token_stream(&transpiler)?.to_string(),
-                    "pub const MAX : i32 = 100 ;"
+                    "# [doc = concat ! (\" Auto-transpiled const literal \" , stringify ! (i32))] pub const MAX : i32 = 100 ;"
                 );
             }
             item => panic!("expected ItemConst, got {item:?}"),
@@ -1007,7 +1002,7 @@ mod tests {
             crate::ast::Item::Const(c) => {
                 assert_eq!(
                     c.transpile_token_stream(&transpiler)?.to_string(),
-                    "pub const PI : f64 = 3.14 ;"
+                    "# [doc = concat ! (\" Auto-transpiled const literal \" , stringify ! (f64))] pub const PI : f64 = 3.14 ;"
                 );
             }
             item => panic!("expected ItemConst, got {item:?}"),
@@ -1024,7 +1019,7 @@ mod tests {
             crate::ast::Item::Const(c) => {
                 assert_eq!(
                     c.transpile_token_stream(&transpiler)?.to_string(),
-                    "pub const FLAG : bool = true ;"
+                    "# [doc = concat ! (\" Auto-transpiled const \" , stringify ! (bool))] pub const FLAG : bool = true ;"
                 );
             }
             item => panic!("expected ItemConst, got {item:?}"),
@@ -1035,13 +1030,24 @@ mod tests {
     #[test]
     fn const_char_literal_casts() -> Result<(), TranspileError> {
         let transpiler = Transpiler::default();
-        let src = "constexpr char CONST_CHAR_VALUE = 'W';";
+        let src = "
+            constexpr char CONST_CHAR_VALUE = 'W';
+            constexpr CustomType CONST_CUSTOM_VALUE = 'W';";
         let file = parse_file(src).unwrap();
         match &file.items[0] {
             crate::ast::Item::Const(c) => {
                 assert_eq!(
                     c.transpile_token_stream(&transpiler)?.to_string(),
-                    "pub const CONST_CHAR_VALUE : u8 = 'W' as u8 ;"
+                    "# [doc = concat ! (\" Auto-transpiled const literal \" , stringify ! (char))] pub const CONST_CHAR_VALUE : char = 'W' ;"
+                );
+            }
+            item => panic!("expected ItemConst, got {item:?}"),
+        }
+        match &file.items[1] {
+            crate::ast::Item::Const(c) => {
+                assert_eq!(
+                    c.transpile_token_stream(&transpiler)?.to_string(),
+                    "# [doc = concat ! (\" Auto-transpiled const literal \" , stringify ! (CustomType))] pub const CONST_CUSTOM_VALUE : CustomType = 'W' as CustomType ;"
                 );
             }
             item => panic!("expected ItemConst, got {item:?}"),
@@ -1058,7 +1064,7 @@ mod tests {
             crate::ast::Item::Const(c) => {
                 assert_eq!(
                     c.transpile_token_stream(&transpiler)?.to_string(),
-                    r#"pub const WRONG_RETURN_CODE : & str = "404" ;"#
+                    r#"# [doc = " Auto-transpiled &str const"] pub const WRONG_RETURN_CODE : & str = "404" ;"#
                 );
             }
             item => panic!("expected ItemConst, got {item:?}"),
@@ -1075,7 +1081,7 @@ mod tests {
             crate::ast::Item::Static(s) => {
                 assert_eq!(
                     s.transpile_token_stream(&transpiler)?.to_string(),
-                    "pub static count : i32 = 0 ;"
+                    "# [doc = concat ! (\" Auto-transpiled static literal \" , stringify ! (i32))] pub static count : i32 = 0 ;"
                 );
             }
             item => panic!("expected ItemStatic, got {item:?}"),
@@ -1093,7 +1099,7 @@ mod tests {
         match &file.items[0] {
             crate::ast::Item::Static(s) => {
                 let out = s.transpile_token_stream(&transpiler)?.to_string();
-                assert_eq!(out, r#"pub static listOfChars : [u8 ; 5] = * b"ALPN\0" ;"#);
+                assert_eq!(out, r#"pub static listOfChars : & str = "ALPN" ;"#);
             }
             item => panic!("expected ItemStatic, got {item:?}"),
         }
@@ -1110,7 +1116,7 @@ mod tests {
         match &file.items[0] {
             crate::ast::Item::Static(s) => {
                 let out = s.transpile_token_stream(&transpiler)?.to_string();
-                assert_eq!(out, r#"pub static nl : [u8 ; 4] = * b"a\nb\0" ;"#);
+                assert_eq!(out, r#"pub static nl : & str = "a\nb" ;"#);
             }
             item => panic!("expected ItemStatic, got {item:?}"),
         }
