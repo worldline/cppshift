@@ -418,10 +418,6 @@ impl<'de> Transpile for ItemConst<'de> {
             Expr::Lit(ExprLit { kind, .. }) => {
                 let rust_ty = transpiler.ty_mapper.map_type(&self.ty)?;
                 if kind.match_type(&self.ty) {
-                    println!(
-                        "Warning: literal kind {:?} does not match fundamental type {:?}, inserting cast",
-                        kind, self.ty
-                    );
                     tokens.extend(quote::quote! {
                         #[doc = concat!(" Auto-transpiled const literal ", stringify!(#rust_ty))]
                         pub const #name: #rust_ty = #expr_tokens;
