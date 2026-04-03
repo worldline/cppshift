@@ -2,6 +2,8 @@
 //!
 //! Not part of the public API. Used exclusively by [`super::parse_file`].
 
+use std::collections::LinkedList;
+
 use crate::SourceSpan;
 use crate::lex::{Lexer, Token, TokenKind};
 
@@ -247,7 +249,7 @@ fn parse_item<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError> {
     // Empty declaration (stray semicolons, e.g., after namespace or class body)
     if p.peek_kind() == Some(TokenKind::Semicolon) {
         p.bump()?;
-        return Ok(Item::Verbatim(ItemVerbatim { tokens: Vec::new() }));
+        return Ok(Item::Verbatim(ItemVerbatim::default()));
     }
 
     // Parse leading attributes [[...]]
@@ -296,7 +298,7 @@ fn parse_item<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError> {
                 }
             }
             p.expect(TokenKind::Semicolon)?;
-            Some(Item::Verbatim(ItemVerbatim { tokens: Vec::new() }))
+            Some(Item::Verbatim(ItemVerbatim::default()))
         }
         _ => None,
     };
@@ -814,9 +816,7 @@ fn parse_item_foreign_mod<'de>(p: &mut Parser<'de>) -> Result<ItemForeignMod<'de
         return Ok(ItemForeignMod {
             attrs: Vec::new(),
             abi,
-            items: vec![ForeignItem::Verbatim(ItemVerbatim {
-                tokens: Vec::new(), // simplified
-            })],
+            items: vec![ForeignItem::Verbatim(ItemVerbatim::default())],
         });
     }
 
@@ -827,7 +827,7 @@ fn parse_item_foreign_mod<'de>(p: &mut Parser<'de>) -> Result<ItemForeignMod<'de
         match inner_item {
             Item::Fn(f) => items.push(ForeignItem::Fn(f)),
             Item::Static(s) => items.push(ForeignItem::Static(s)),
-            _ => items.push(ForeignItem::Verbatim(ItemVerbatim { tokens: Vec::new() })),
+            _ => items.push(ForeignItem::Verbatim(ItemVerbatim::default())),
         }
     }
     p.expect(TokenKind::RightBrace)?;
@@ -1229,45 +1229,45 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
             Type::Path(tp) => tp.path.segments[0].ident,
             _ => unreachable!(),
         };
-        let mut tokens = vec![Token::new(macro_ident.span, TokenKind::Ident)];
-        tokens.push(p.bump()?); // (
+        let mut tokens = LinkedList::from([Token::new(macro_ident.span, TokenKind::Ident)]);
+        tokens.push_back(p.bump()?); // (
         let mut depth = 1u32;
         while depth > 0 && !p.is_empty() {
             match p.peek_kind() {
                 Some(TokenKind::LeftParenthese) => {
                     depth += 1;
-                    tokens.push(p.bump()?);
+                    tokens.push_back(p.bump()?);
                 }
                 Some(TokenKind::RightParenthese) => {
                     depth -= 1;
-                    tokens.push(p.bump()?);
+                    tokens.push_back(p.bump()?);
                 }
                 _ => {
-                    tokens.push(p.bump()?);
+                    tokens.push_back(p.bump()?);
                 }
             }
         }
         // Optional trailing block { ... } (e.g., MACRO_NAME(suite, name) { body })
         if p.peek_kind() == Some(TokenKind::LeftBrace) {
-            tokens.push(p.bump()?);
+            tokens.push_back(p.bump()?);
             let mut brace_depth = 1u32;
             while brace_depth > 0 && !p.is_empty() {
                 match p.peek_kind() {
                     Some(TokenKind::LeftBrace) => {
                         brace_depth += 1;
-                        tokens.push(p.bump()?);
+                        tokens.push_back(p.bump()?);
                     }
                     Some(TokenKind::RightBrace) => {
                         brace_depth -= 1;
-                        tokens.push(p.bump()?);
+                        tokens.push_back(p.bump()?);
                     }
                     _ => {
-                        tokens.push(p.bump()?);
+                        tokens.push_back(p.bump()?);
                     }
                 }
             }
         } else if let Some(semi) = p.eat(TokenKind::Semicolon) {
-            tokens.push(semi);
+            tokens.push_back(semi);
         }
         return Ok(Item::Verbatim(ItemVerbatim { tokens }));
     }

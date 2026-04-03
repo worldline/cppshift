@@ -3,6 +3,7 @@
 //! Each variant of [`Item`] corresponds to a top-level declaration in a C++ translation unit,
 //! following the naming conventions of `syn::Item`.
 
+use std::collections::LinkedList;
 use std::fmt;
 
 use crate::SourceSpan;
@@ -436,9 +437,9 @@ pub struct ItemMacro<'de> {
 }
 
 /// Tokens not interpreted by the parser, analogous to `syn::Item::Verbatim`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct ItemVerbatim<'de> {
-    pub tokens: Vec<Token<'de>>,
+    pub tokens: LinkedList<Token<'de>>,
 }
 
 /// A constructor declaration/definition.
