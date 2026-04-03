@@ -1225,50 +1225,51 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
             return Err(p.error_at_current("expected identifier or function pointer"));
         }
         // Treat as macro invocation: consume everything until matching ) and ;
-        let _macro_ident = match &return_type {
+        let macro_ident = match &return_type {
             Type::Path(tp) => tp.path.segments[0].ident,
             _ => unreachable!(),
         };
-        p.bump()?; // (
+        let mut tokens = vec![Token::new(macro_ident.span, TokenKind::Ident)];
+        tokens.push(p.bump()?); // (
         let mut depth = 1u32;
         while depth > 0 && !p.is_empty() {
             match p.peek_kind() {
                 Some(TokenKind::LeftParenthese) => {
                     depth += 1;
-                    p.bump()?;
+                    tokens.push(p.bump()?);
                 }
                 Some(TokenKind::RightParenthese) => {
                     depth -= 1;
-                    p.bump()?;
+                    tokens.push(p.bump()?);
                 }
                 _ => {
-                    p.bump()?;
+                    tokens.push(p.bump()?);
                 }
             }
         }
         // Optional trailing block { ... } (e.g., MACRO_NAME(suite, name) { body })
         if p.peek_kind() == Some(TokenKind::LeftBrace) {
-            p.bump()?;
+            tokens.push(p.bump()?);
             let mut brace_depth = 1u32;
             while brace_depth > 0 && !p.is_empty() {
                 match p.peek_kind() {
                     Some(TokenKind::LeftBrace) => {
                         brace_depth += 1;
-                        p.bump()?;
+                        tokens.push(p.bump()?);
                     }
                     Some(TokenKind::RightBrace) => {
                         brace_depth -= 1;
-                        p.bump()?;
+                        tokens.push(p.bump()?);
                     }
                     _ => {
-                        p.bump()?;
+                        tokens.push(p.bump()?);
                     }
                 }
             }
-        } else {
-            p.eat(TokenKind::Semicolon); // optional trailing semicolon
+        } else if let Some(semi) = p.eat(TokenKind::Semicolon) {
+            tokens.push(semi);
         }
-        return Ok(Item::Verbatim(ItemVerbatim { tokens: Vec::new() }));
+        return Ok(Item::Verbatim(ItemVerbatim { tokens }));
     }
 
     // Parse name — could be a qualified path (e.g., Foo::bar, A::B::method)

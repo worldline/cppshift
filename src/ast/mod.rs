@@ -391,4 +391,160 @@ mod tests {
 
         assert_eq!(None, main_item_iter.next());
     }
+
+    /// Test the ast parser with a simple class definition that includes a constructor, a member function, and a member variable
+    #[test]
+    fn class_header_ast() {
+        let class_header_src = r#"
+            #include <iostream>
+
+            /**
+             * This is a simple class definition for testing the AST parser.
+             * It includes a constructor, a member function, and a member variable.
+             */
+            class MyClass: public MyMotherClass
+            {
+                MACRO_DEF(param1, 1);
+                typedef MyMotherClass BaseClass;
+
+                private: int member_var;
+                public: MyClass(int x) : member_var(x) {}
+                public: void member_function();
+            };
+        "#;
+
+        let class_header_file = parse_file(class_header_src).unwrap();
+        assert!(!class_header_file.items.is_empty());
+        let mut class_header_item_iter = class_header_file.items.iter();
+
+        let include_system_iostream = class_header_item_iter.next();
+        if let Some(Item::Include(ItemInclude { span, path })) = include_system_iostream {
+            assert_eq!(span.src(), "#include <iostream>");
+            if let IncludePath::System(path_span) = path {
+                assert_eq!(path_span.src(), "iostream");
+            } else {
+                panic!("Expected a system include path, got {:#?}", path);
+            }
+        } else {
+            panic!(
+                "Wrong item: expected an include directive, got {:#?}",
+                include_system_iostream
+            );
+        }
+
+        let class_header = class_header_item_iter.next();
+        if let Some(Item::Class(ItemClass {
+            attrs,
+            ident,
+            generics,
+            bases,
+            fields: Fields::Named(fields_named),
+        })) = class_header
+        {
+            assert_eq!(attrs.len(), 0);
+            assert_eq!(Some("MyClass"), ident.as_ref().map(|id| id.sym));
+            assert_eq!(&None, generics);
+
+            if bases.len() == 1
+                && let Some(base) = bases.first()
+            {
+                assert_eq!(base.access, Visibility::Public);
+                assert_eq!(base.virtual_token, false);
+                assert_eq!(base.path.to_string(), "MyMotherClass");
+            } else {
+                panic!(
+                    "Wrong class.bases: expected an inheritance, got {:#?}",
+                    bases
+                );
+            }
+
+            let mut fields_named_iter = fields_named.members.iter();
+
+            // 1. MACRO_DEF(param1, 1); → Verbatim
+            let verbatim_item = fields_named_iter.next();
+            if let Some(Member::Item(item)) = verbatim_item
+                && let Item::Verbatim(verbatim) = item.as_ref()
+            {
+                assert!(!verbatim.tokens.is_empty());
+            } else {
+                panic!("Expected a macro verbatim, got {:#?}", verbatim_item);
+            }
+
+            // 2. typedef MyMotherClass BaseClass; → Typedef
+            let typedef_item = fields_named_iter.next();
+            if let Some(Member::Item(item)) = typedef_item
+                && let Item::Typedef(td) = item.as_ref()
+            {
+                assert_eq!(td.ident.sym, "BaseClass");
+            } else {
+                panic!("Expected a typedef, got {:#?}", typedef_item);
+            }
+
+            // 3. private: → AccessSpecifier
+            let access_private = fields_named_iter.next();
+            assert_eq!(
+                Some(&Member::AccessSpecifier(Visibility::Private)),
+                access_private,
+            );
+
+            // 4. int member_var; → Field
+            let field_member_var = fields_named_iter.next();
+            if let Some(Member::Field(field)) = field_member_var {
+                assert_eq!(Some("member_var"), field.ident.as_ref().map(|id| id.sym));
+                assert_eq!(field.default_value, None);
+            } else {
+                panic!("Expected a field, got {:#?}", field_member_var);
+            }
+
+            // 5. public: → AccessSpecifier
+            let access_public1 = fields_named_iter.next();
+            assert_eq!(
+                Some(&Member::AccessSpecifier(Visibility::Public)),
+                access_public1,
+            );
+
+            // 6. MyClass(int x) : member_var(x) {} → Constructor
+            let constructor = fields_named_iter.next();
+            if let Some(Member::Constructor(ctor)) = constructor {
+                assert_eq!(ctor.ident.sym, "MyClass");
+                assert_eq!(ctor.explicit_token, false);
+                assert_eq!(ctor.constexpr_token, false);
+                assert_eq!(ctor.noexcept_token, false);
+                assert_eq!(ctor.defaulted, false);
+                assert_eq!(ctor.deleted, false);
+                assert_eq!(ctor.inputs.len(), 1);
+                assert_eq!(ctor.member_init_list.len(), 1);
+                assert_eq!(ctor.member_init_list[0].member.sym, "member_var");
+                assert!(ctor.block.is_some());
+            } else {
+                panic!("Expected a constructor, got {:#?}", constructor);
+            }
+
+            // 7. public: → AccessSpecifier
+            let access_public2 = fields_named_iter.next();
+            assert_eq!(
+                Some(&Member::AccessSpecifier(Visibility::Public)),
+                access_public2,
+            );
+
+            // 8. void member_function(); → Method
+            let method = fields_named_iter.next();
+            if let Some(Member::Method(m)) = method {
+                assert_eq!(m.sig.ident.sym, "member_function");
+                assert!(m.block.is_none());
+            } else {
+                panic!("Expected a method, got {:#?}", method);
+            }
+
+            // No more members
+            assert_eq!(None, fields_named_iter.next());
+        } else {
+            panic!(
+                "Wrong item: expected a class definition, got {:#?}",
+                class_header
+            );
+        }
+
+        assert_eq!(None, class_header_item_iter.next());
+    }
 }
