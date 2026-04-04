@@ -449,7 +449,7 @@ mod tests {
                 && let Some(base) = bases.first()
             {
                 assert_eq!(base.access, Visibility::Public);
-                assert_eq!(base.virtual_token, false);
+                assert!(!base.virtual_token);
                 assert_eq!(base.path.to_string(), "MyMotherClass");
             } else {
                 panic!(
@@ -507,11 +507,11 @@ mod tests {
             let constructor = fields_named_iter.next();
             if let Some(Member::Constructor(ctor)) = constructor {
                 assert_eq!(ctor.ident.sym, "MyClass");
-                assert_eq!(ctor.explicit_token, false);
-                assert_eq!(ctor.constexpr_token, false);
-                assert_eq!(ctor.noexcept_token, false);
-                assert_eq!(ctor.defaulted, false);
-                assert_eq!(ctor.deleted, false);
+                assert!(!ctor.explicit_token);
+                assert!(!ctor.constexpr_token);
+                assert!(!ctor.noexcept_token);
+                assert!(!ctor.defaulted);
+                assert!(!ctor.deleted);
                 assert_eq!(ctor.inputs.len(), 1);
                 assert_eq!(ctor.member_init_list.len(), 1);
                 assert_eq!(ctor.member_init_list[0].member.sym, "member_var");
