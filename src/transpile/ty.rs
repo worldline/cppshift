@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use proc_macro2::TokenStream;
+use quote::ToTokens as _;
 use serde::Deserialize;
 use serde::de::{self, MapAccess, Visitor};
 
@@ -293,6 +294,17 @@ fn type_span<'de>(ty: &Type<'de>) -> Option<crate::SourceSpan<'de>> {
         Type::FnPtr(f) => type_span(&f.return_type),
         Type::Qualified(q) => type_span(&q.ty),
         Type::TemplateInst(t) => t.path.segments.first().map(|s| s.ident.span),
+    }
+}
+
+impl<'de> Transpile for Type<'de> {
+    fn transpile(
+        &self,
+        transpiler: &Transpiler,
+        tokens: &mut TokenStream,
+    ) -> Result<(), TranspileError> {
+        transpiler.ty_mapper.map_type(self)?.to_tokens(tokens);
+        Ok(())
     }
 }
 

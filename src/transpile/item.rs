@@ -3,7 +3,7 @@ use quote::ToTokens;
 use syn::parse_str;
 
 use crate::{
-    ast::{Ident, ItemEnum, Path, Visibility},
+    ast::{Field, Ident, ItemEnum, Path, Visibility},
     transpile::{Transpile, TranspileError, Transpiler},
 };
 
@@ -66,6 +66,23 @@ macro_rules! impl_try_from_path {
 }
 impl_try_from_path!(syn::Type, syn::Path, syn::Expr);
 
+impl<'de> Transpile for Field<'de> {
+    fn transpile(
+        &self,
+        transpiler: &Transpiler,
+        tokens: &mut TokenStream,
+    ) -> Result<(), TranspileError> {
+        if let Some(ident) = self.ident {
+            self.vis.to_tokens(tokens);
+            ident.to_tokens(tokens);
+            tokens.extend(quote::quote! { : });
+            self.ty.transpile(transpiler, tokens)?;
+        }
+
+        Ok(())
+    }
+}
+
 impl<'de> Transpile for ItemEnum<'de> {
     fn transpile(
         &self,
@@ -116,8 +133,10 @@ impl<'de> Transpile for ItemEnum<'de> {
 
 #[cfg(test)]
 mod tests {
+    use core::panic;
+
     use super::*;
-    use crate::ast::parse_file;
+    use crate::ast::{self, parse_file};
 
     // ---- ItemEnum transpilation ----
 
@@ -170,6 +189,68 @@ mod tests {
                 );
             }
             item => panic!("expected ItemEnum, got {item:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn class_member_variable_transpiles() -> Result<(), TranspileError> {
+        let transpiler = Transpiler::default();
+        let src =
+            "class Color { public: int R; private: unsigned long long G; protected: short B; };";
+        let file = parse_file(src).unwrap();
+        match &file.items[0] {
+            ast::Item::Class(ast::ItemClass {
+                fields: ast::Fields::Named(named_fields),
+                ..
+            }) => {
+                if let ast::Member::Field(field) = &named_fields.members[1] {
+                    assert_eq!(
+                        field
+                            .transpile_token_stream(&transpiler)
+                            .expect("Failed to transpile field[0]")
+                            .to_string(),
+                        "pub R : i32",
+                    );
+                } else {
+                    panic!(
+                        "expected field member[0], got {:?}",
+                        &named_fields.members[0]
+                    );
+                }
+
+                if let ast::Member::Field(field) = &named_fields.members[3] {
+                    assert_eq!(
+                        field
+                            .transpile_token_stream(&transpiler)
+                            .expect("Failed to transpile field[3]")
+                            .to_string(),
+                        "G : u64",
+                    );
+                } else {
+                    panic!(
+                        "expected field member[3], got {:?}",
+                        &named_fields.members[3]
+                    );
+                }
+
+                if let ast::Member::Field(field) = &named_fields.members[5] {
+                    assert_eq!(
+                        field
+                            .transpile_token_stream(&transpiler)
+                            .expect("Failed to transpile field[5]")
+                            .to_string(),
+                        "pub (crate) B : i16",
+                    );
+                } else {
+                    panic!(
+                        "expected field member[5], got {:?}",
+                        &named_fields.members[5]
+                    );
+                }
+            }
+            item => panic!("expected ItemClass, got {item:?}"),
         }
 
         Ok(())

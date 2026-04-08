@@ -1838,6 +1838,7 @@ fn parse_fields_named<'de>(
 ) -> Result<FieldsNamed<'de>, AstError> {
     p.expect(TokenKind::LeftBrace)?;
     let mut members = Vec::new();
+    let mut current_vis = Visibility::Inherited;
 
     while p.peek_kind() != Some(TokenKind::RightBrace) && !p.is_empty() {
         // Skip attributes inside class body
@@ -2012,18 +2013,21 @@ fn parse_fields_named<'de>(
             Some(TokenKind::KeywordPublic) => {
                 p.bump()?;
                 p.expect(TokenKind::Colon)?;
+                current_vis = Visibility::Public;
                 members.push(Member::AccessSpecifier(Visibility::Public));
                 continue;
             }
             Some(TokenKind::KeywordProtected) => {
                 p.bump()?;
                 p.expect(TokenKind::Colon)?;
+                current_vis = Visibility::Protected;
                 members.push(Member::AccessSpecifier(Visibility::Protected));
                 continue;
             }
             Some(TokenKind::KeywordPrivate) => {
                 p.bump()?;
                 p.expect(TokenKind::Colon)?;
+                current_vis = Visibility::Private;
                 members.push(Member::AccessSpecifier(Visibility::Private));
                 continue;
             }
@@ -2062,7 +2066,7 @@ fn parse_fields_named<'de>(
             Item::Static(s) => {
                 members.push(Member::Field(Field {
                     attrs: Vec::new(),
-                    vis: Visibility::Inherited,
+                    vis: current_vis,
                     ty: s.ty,
                     ident: Some(s.ident),
                     default_value: s.expr,
@@ -2071,7 +2075,7 @@ fn parse_fields_named<'de>(
             Item::Const(c) => {
                 members.push(Member::Field(Field {
                     attrs: Vec::new(),
-                    vis: Visibility::Inherited,
+                    vis: current_vis,
                     ty: c.ty,
                     ident: Some(c.ident),
                     default_value: Some(c.expr),
