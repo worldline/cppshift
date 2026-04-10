@@ -32,6 +32,24 @@ impl<'de> PartialEq<&str> for Ident<'de> {
     }
 }
 
+impl<'de> PartialEq<Ident<'de>> for &str {
+    fn eq(&self, ident: &Ident<'de>) -> bool {
+        *self == ident.sym
+    }
+}
+
+impl<'de> PartialEq<String> for Ident<'de> {
+    fn eq(&self, sym: &String) -> bool {
+        self.sym == sym.as_str()
+    }
+}
+
+impl<'de> PartialEq<Ident<'de>> for String {
+    fn eq(&self, ident: &Ident<'de>) -> bool {
+        self.as_str() == ident.sym
+    }
+}
+
 impl<'de> Hash for Ident<'de> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.sym.hash(state);
@@ -237,6 +255,27 @@ pub struct Signature<'de> {
     pub defaulted: bool,
     /// `true` if `= delete` (explicitly deleted function).
     pub deleted: bool,
+}
+
+impl<'de> Signature<'de> {
+    /// Returns true if this is a class constructor.
+    pub fn is_class_constructor(&self) -> bool {
+        self.class_path
+            .as_ref()
+            .is_some_and(|cp| self.ident == cp.to_string())
+    }
+
+    /// Checks if this function can be called with no arguments
+    /// (either no parameters or all parameters have defaults).
+    pub fn has_no_required_params(&self) -> bool {
+        if let Some((fn_arg, _)) = self.inputs.inner.first()
+            && fn_arg.default_value.is_none()
+        {
+            false
+        } else {
+            !self.deleted
+        }
+    }
 }
 
 /// An enum variant, analogous to `syn::Variant`.
