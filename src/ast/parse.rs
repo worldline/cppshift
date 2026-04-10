@@ -2067,6 +2067,7 @@ fn parse_fields_named<'de>(
                 members.push(Member::Field(Field {
                     attrs: Vec::new(),
                     vis: current_vis,
+                    static_token: true,
                     ty: s.ty,
                     ident: Some(s.ident),
                     default_value: s.expr,
@@ -2076,6 +2077,7 @@ fn parse_fields_named<'de>(
                 members.push(Member::Field(Field {
                     attrs: Vec::new(),
                     vis: current_vis,
+                    static_token: false,
                     ty: c.ty,
                     ident: Some(c.ident),
                     default_value: Some(c.expr),

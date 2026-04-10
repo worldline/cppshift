@@ -109,6 +109,8 @@ pub struct Field<'de> {
     pub attrs: Vec<Attribute<'de>>,
     /// Access specifier (`public`, `private`, `protected`).
     pub vis: Visibility,
+    /// `true` if declared `static`.
+    pub static_token: bool,
     /// The field's type.
     pub ty: Type<'de>,
     /// Field name. `None` for anonymous fields (e.g. anonymous unions).

@@ -407,6 +407,9 @@ mod tests {
                 MACRO_DEF(param1, 1);
                 typedef MyMotherClass BaseClass;
 
+                public:
+                static const string STATIC_VALUE;
+
                 private: int member_var;
                 public: MyClass(int x) : member_var(x) {}
                 public: void member_function();
@@ -480,14 +483,31 @@ mod tests {
                 panic!("Expected a typedef, got {:#?}", typedef_item);
             }
 
-            // 3. private: → AccessSpecifier
+            // 3. public: → AccessSpecifier
+            let access_public_static = fields_named_iter.next();
+            assert_eq!(
+                Some(&Member::AccessSpecifier(Visibility::Public)),
+                access_public_static,
+            );
+
+            // 4. static const string STATIC_VALUE; → Field
+            let static_field = fields_named_iter.next();
+            if let Some(Member::Field(field)) = static_field {
+                assert_eq!(Some("STATIC_VALUE"), field.ident.as_ref().map(|id| id.sym));
+                assert!(field.static_token);
+                assert_eq!(field.default_value, None);
+            } else {
+                panic!("Expected a static field, got {:#?}", static_field);
+            }
+
+            // 5. private: → AccessSpecifier
             let access_private = fields_named_iter.next();
             assert_eq!(
                 Some(&Member::AccessSpecifier(Visibility::Private)),
                 access_private,
             );
 
-            // 4. int member_var; → Field
+            // 6. int member_var; → Field
             let field_member_var = fields_named_iter.next();
             if let Some(Member::Field(field)) = field_member_var {
                 assert_eq!(Some("member_var"), field.ident.as_ref().map(|id| id.sym));
@@ -496,14 +516,14 @@ mod tests {
                 panic!("Expected a field, got {:#?}", field_member_var);
             }
 
-            // 5. public: → AccessSpecifier
+            // 7. public: → AccessSpecifier
             let access_public1 = fields_named_iter.next();
             assert_eq!(
                 Some(&Member::AccessSpecifier(Visibility::Public)),
                 access_public1,
             );
 
-            // 6. MyClass(int x) : member_var(x) {} → Constructor
+            // 8. MyClass(int x) : member_var(x) {} → Constructor
             let constructor = fields_named_iter.next();
             if let Some(Member::Constructor(ctor)) = constructor {
                 assert_eq!(ctor.ident.sym, "MyClass");
@@ -520,14 +540,14 @@ mod tests {
                 panic!("Expected a constructor, got {:#?}", constructor);
             }
 
-            // 7. public: → AccessSpecifier
+            // 9. public: → AccessSpecifier
             let access_public2 = fields_named_iter.next();
             assert_eq!(
                 Some(&Member::AccessSpecifier(Visibility::Public)),
                 access_public2,
             );
 
-            // 8. void member_function(); → Method
+            // 10. void member_function(); → Method
             let method = fields_named_iter.next();
             if let Some(Member::Method(m)) = method {
                 assert_eq!(m.sig.ident.sym, "member_function");
