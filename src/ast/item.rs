@@ -634,6 +634,19 @@ pub struct ItemConstructor<'de> {
     pub deleted: bool,
 }
 
+impl<'de> ItemConstructor<'de> {
+    /// Checks if this constructor is a default constructor (no parameters).
+    pub fn is_default_constructor(&self) -> bool {
+        if let Some((fn_arg, _)) = self.inputs.inner.first()
+            && fn_arg.default_value.is_none()
+        {
+            false
+        } else {
+            !self.deleted
+        }
+    }
+}
+
 /// A destructor declaration/definition.
 ///
 /// Example: `virtual ~Widget() noexcept = default;`

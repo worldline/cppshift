@@ -12,7 +12,7 @@ use crate::lex::Token;
 /// like function arguments: `a, b, c`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Punctuated<'de, T> {
-    inner: Vec<(T, Option<Token<'de>>)>,
+    pub(crate) inner: Vec<(T, Option<Token<'de>>)>,
 }
 
 impl<'de, T> Punctuated<'de, T> {
