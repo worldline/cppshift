@@ -216,6 +216,12 @@ pub fn visit_signature<'de, V: Visit<'de> + ?Sized>(v: &mut V, sig: &Signature<'
             v.visit_ident(ident);
         }
     }
+    for init in &sig.member_init_list {
+        v.visit_path(&init.member);
+        for expr in init.args.iter() {
+            v.visit_expr(expr);
+        }
+    }
 }
 
 pub fn visit_block<'de, V: Visit<'de> + ?Sized>(v: &mut V, block: &Block<'de>) {

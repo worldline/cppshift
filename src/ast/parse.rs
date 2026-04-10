@@ -1130,6 +1130,7 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
                 pure_virtual: false,
                 defaulted: false,
                 deleted: false,
+                member_init_list: Vec::new(),
             },
             block,
         }));
@@ -1184,14 +1185,33 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
                         _ => break,
                     }
                 }
-                // Member initializer list for constructors
-                if p.eat(TokenKind::Colon).is_some() {
-                    // Skip member init list
-                    while p.peek_kind() != Some(TokenKind::LeftBrace)
-                        && p.peek_kind() != Some(TokenKind::Semicolon)
-                        && !p.is_empty()
-                    {
-                        p.bump()?;
+                // Member initializer list for constructors only
+                let mut member_init_list = Vec::new();
+                let is_constructor = class_path.as_ref().is_some_and(|cp| {
+                    cp.segments
+                        .last()
+                        .is_some_and(|seg| seg.ident.sym == fn_name.sym)
+                });
+                if is_constructor && p.eat(TokenKind::Colon).is_some() {
+                    loop {
+                        skip_macro_annotations(p)?;
+                        let member = parse_path(p)?;
+                        p.expect(TokenKind::LeftParenthese)?;
+                        let mut args = Punctuated::new();
+                        while p.peek_kind() != Some(TokenKind::RightParenthese) && !p.is_empty() {
+                            let arg = parse_expr_no_comma(p)?;
+                            if let Some(comma) = p.eat(TokenKind::Comma) {
+                                args.push_pair(arg, comma);
+                            } else {
+                                args.push_value(arg);
+                                break;
+                            }
+                        }
+                        p.expect(TokenKind::RightParenthese)?;
+                        member_init_list.push(MemberInit { member, args });
+                        if p.eat(TokenKind::Comma).is_none() {
+                            break;
+                        }
                     }
                 }
                 // Trailing return type
@@ -1230,6 +1250,7 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
                         pure_virtual: false,
                         defaulted: false,
                         deleted: false,
+                        member_init_list,
                     },
                     block,
                 }));
@@ -1484,13 +1505,33 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
             }
         }
 
-        // Member initializer list for constructors: : member(arg), ...
-        if p.eat(TokenKind::Colon).is_some() {
-            while p.peek_kind() != Some(TokenKind::LeftBrace)
-                && p.peek_kind() != Some(TokenKind::Semicolon)
-                && !p.is_empty()
-            {
-                p.bump()?;
+        // Member initializer list for constructors only: : member(arg), ...
+        let mut member_init_list = Vec::new();
+        let is_constructor = class_path.as_ref().is_some_and(|cp| {
+            cp.segments
+                .last()
+                .is_some_and(|seg| seg.ident.sym == ident.sym)
+        });
+        if is_constructor && p.eat(TokenKind::Colon).is_some() {
+            loop {
+                skip_macro_annotations(p)?;
+                let member = parse_path(p)?;
+                p.expect(TokenKind::LeftParenthese)?;
+                let mut args = Punctuated::new();
+                while p.peek_kind() != Some(TokenKind::RightParenthese) && !p.is_empty() {
+                    let arg = parse_expr_no_comma(p)?;
+                    if let Some(comma) = p.eat(TokenKind::Comma) {
+                        args.push_pair(arg, comma);
+                    } else {
+                        args.push_value(arg);
+                        break;
+                    }
+                }
+                p.expect(TokenKind::RightParenthese)?;
+                member_init_list.push(MemberInit { member, args });
+                if p.eat(TokenKind::Comma).is_none() {
+                    break;
+                }
             }
         }
 
@@ -1513,6 +1554,7 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
             pure_virtual,
             defaulted,
             deleted,
+            member_init_list,
         };
 
         // Skip macro annotations between signature and body (e.g., GTEST_LOCK_EXCLUDED_(mutex_))
@@ -1985,7 +2027,8 @@ fn parse_fields_named<'de>(
 
                 if p.eat(TokenKind::Colon).is_some() {
                     loop {
-                        let member = parse_ident(p)?;
+                        skip_macro_annotations(p)?;
+                        let member = parse_path(p)?;
                         p.expect(TokenKind::LeftParenthese)?;
                         let mut args = Punctuated::new();
                         while p.peek_kind() != Some(TokenKind::RightParenthese) && !p.is_empty() {
@@ -2992,6 +3035,55 @@ fn parse_type_suffix<'de>(p: &mut Parser<'de>, mut ty: Type<'de>) -> Result<Type
         }
     }
     Ok(ty)
+}
+
+// ---------------------------------------------------------------------------
+// Macro annotation skipping
+// ---------------------------------------------------------------------------
+
+/// Skip macro-like annotations and preprocessor directives.
+/// Handles ALL_CAPS identifiers optionally followed by `(...)` and `#ifdef`/`#endif` etc.
+fn skip_macro_annotations<'de>(p: &mut Parser<'de>) -> Result<(), AstError> {
+    loop {
+        match p.peek_kind() {
+            Some(TokenKind::NumberSign) => {
+                parse_item_macro(p)?;
+            }
+            Some(TokenKind::Ident) => {
+                let src = p.peek().unwrap().src();
+                let is_macro_like = src.len() > 1
+                    && src.contains('_')
+                    && src
+                        .chars()
+                        .all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit());
+                if !is_macro_like {
+                    break;
+                }
+                p.bump()?;
+                if p.peek_kind() == Some(TokenKind::LeftParenthese) {
+                    p.bump()?;
+                    let mut depth = 1u32;
+                    while depth > 0 && !p.is_empty() {
+                        match p.peek_kind() {
+                            Some(TokenKind::LeftParenthese) => {
+                                depth += 1;
+                                p.bump()?;
+                            }
+                            Some(TokenKind::RightParenthese) => {
+                                depth -= 1;
+                                p.bump()?;
+                            }
+                            _ => {
+                                p.bump()?;
+                            }
+                        }
+                    }
+                }
+            }
+            _ => break,
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -4747,7 +4839,7 @@ mod tests {
                     match &f.members[0] {
                         Member::Constructor(ctor) => {
                             assert_eq!(ctor.member_init_list.len(), 1);
-                            assert_eq!(ctor.member_init_list[0].member.sym, "m_x");
+                            assert_eq!(ctor.member_init_list[0].member.to_string(), "m_x");
                         }
                         other => panic!("expected Constructor, got {other:?}"),
                     }

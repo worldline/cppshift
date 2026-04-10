@@ -44,6 +44,8 @@ pub fn parse_file<'de>(content: &'de str) -> Result<File<'de>, AstError> {
 
 #[cfg(test)]
 mod tests {
+    use core::panic;
+
     use crate::ast::expr::{BinaryOp, ExprBinary, ExprIdent, ExprLit, ExprPath, LitKind};
     use crate::ast::stmt::{StmtCase, StmtExpr, StmtReturn, StmtSwitch};
     use crate::ast::ty::{FundamentalKind, TypeArray, TypePtr};
@@ -72,6 +74,9 @@ mod tests {
 
             #define ArgText(x) \
                 x##TEXT
+
+            // class constructor
+            void MyClass::MyClass() : x(2) {}
 
             // class method
             void MyClass::myFunction() {}
@@ -139,24 +144,51 @@ mod tests {
             );
         }
 
-        let class_function = main_item_iter.next();
+        let class_constructor = main_item_iter.next();
         if let Some(Item::Fn(ItemFn {
             attrs,
             vis,
             sig,
             block,
-        })) = class_function
+        })) = class_constructor
+        {
+            assert!(attrs.is_empty());
+            assert_eq!(Visibility::Inherited, *vis);
+            assert_eq!(sig.ident.sym, "MyClass");
+            let class_path = sig.class_path.as_ref().expect("expected class qualifier");
+            assert_eq!(class_path.to_string(), "MyClass");
+            assert!(sig.has_no_required_params());
+            assert!(sig.is_class_constructor());
+            assert_eq!(sig.member_init_list.len(), 1);
+            assert_eq!(sig.member_init_list[0].member.to_string(), "x");
+            assert!(block.is_some());
+        } else {
+            panic!(
+                "Wrong item: expected a class function, got {:#?}",
+                class_constructor
+            );
+        }
+
+        let class_method = main_item_iter.next();
+        if let Some(Item::Fn(ItemFn {
+            attrs,
+            vis,
+            sig,
+            block,
+        })) = class_method
         {
             assert!(attrs.is_empty());
             assert_eq!(Visibility::Inherited, *vis);
             assert_eq!(sig.ident.sym, "myFunction");
             let class_path = sig.class_path.as_ref().expect("expected class qualifier");
             assert_eq!(class_path.to_string(), "MyClass");
+            assert!(sig.has_no_required_params());
+            assert!(!sig.is_class_constructor());
             assert!(block.is_some());
         } else {
             panic!(
                 "Wrong item: expected a class function, got {:#?}",
-                class_function
+                class_method
             );
         }
 
@@ -560,7 +592,7 @@ mod tests {
                 assert!(!ctor.deleted);
                 assert_eq!(ctor.inputs.len(), 1);
                 assert_eq!(ctor.member_init_list.len(), 1);
-                assert_eq!(ctor.member_init_list[0].member.sym, "member_var");
+                assert_eq!(ctor.member_init_list[0].member.to_string(), "member_var");
                 assert!(ctor.block.is_some());
             } else {
                 panic!("Expected a constructor, got {:#?}", constructor);

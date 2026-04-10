@@ -255,6 +255,8 @@ pub struct Signature<'de> {
     pub defaulted: bool,
     /// `true` if `= delete` (explicitly deleted function).
     pub deleted: bool,
+    /// Member initializer list for out-of-line constructors: `: m_x(x), m_y(y)`.
+    pub member_init_list: Vec<MemberInit<'de>>,
 }
 
 impl<'de> Signature<'de> {
@@ -325,11 +327,11 @@ pub enum ForeignItem<'de> {
 
 /// A member initializer in a constructor initializer list.
 ///
-/// Example: `m_x(x)`, `Base(arg)`
+/// Example: `m_x(x)`, `Base(arg)`, `::std::runtime_error(msg)`
 #[derive(Debug, Clone, PartialEq)]
 pub struct MemberInit<'de> {
-    /// The member or base class being initialized.
-    pub member: Ident<'de>,
+    /// The member or base class being initialized (may be a qualified path).
+    pub member: Path<'de>,
     /// The initializer arguments: `m_x(x)` → args is `[x]`.
     pub args: Punctuated<'de, Expr<'de>>,
 }
