@@ -206,6 +206,9 @@ pub fn visit_member<'de, V: Visit<'de> + ?Sized>(v: &mut V, member: &Member<'de>
 
 pub fn visit_signature<'de, V: Visit<'de> + ?Sized>(v: &mut V, sig: &Signature<'de>) {
     v.visit_type(&sig.return_type);
+    if let Some(class_path) = &sig.class_path {
+        v.visit_path(class_path);
+    }
     v.visit_ident(&sig.ident);
     for arg in sig.inputs.iter() {
         v.visit_type(&arg.ty);

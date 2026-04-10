@@ -73,6 +73,9 @@ mod tests {
             #define ArgText(x) \
                 x##TEXT
 
+            // class method
+            void MyClass::myFunction() {}
+
             // main function
             int main(int argc, char* argv[]) {
                 std::cout << "Hello, world" << std::endl;
@@ -136,6 +139,27 @@ mod tests {
             );
         }
 
+        let class_function = main_item_iter.next();
+        if let Some(Item::Fn(ItemFn {
+            attrs,
+            vis,
+            sig,
+            block,
+        })) = class_function
+        {
+            assert!(attrs.is_empty());
+            assert_eq!(Visibility::Inherited, *vis);
+            assert_eq!(sig.ident.sym, "myFunction");
+            let class_path = sig.class_path.as_ref().expect("expected class qualifier");
+            assert_eq!(class_path.to_string(), "MyClass");
+            assert!(block.is_some());
+        } else {
+            panic!(
+                "Wrong item: expected a class function, got {:#?}",
+                class_function
+            );
+        }
+
         let main_function = main_item_iter.next();
         if let Some(Item::Fn(ItemFn {
             attrs,
@@ -148,6 +172,7 @@ mod tests {
             assert_eq!(Visibility::Inherited, *vis);
 
             // Check signature
+            assert!(sig.class_path.is_none());
             assert!(!sig.constexpr_token);
             assert!(!sig.consteval_token);
             assert!(!sig.inline_token);

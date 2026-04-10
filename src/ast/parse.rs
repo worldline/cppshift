@@ -1062,6 +1062,11 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
     // Qualified destructor: ClassName::~ClassName()
     if p.peek_kind() == Some(TokenKind::DoubleColon) && p.peek_nth_kind(1) == Some(TokenKind::Compl)
     {
+        let class_path = if let Type::Path(tp) = &return_type {
+            Some(tp.path.clone())
+        } else {
+            None
+        };
         p.bump()?; // ::
         p.bump()?; // ~
         let dtor_ident = parse_ident(p)?;
@@ -1114,6 +1119,7 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
                     span: dtor_ident.span,
                     kind: FundamentalKind::Void,
                 }),
+                class_path,
                 ident: dtor_ident,
                 inputs,
                 variadic: false,
@@ -1144,11 +1150,15 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
                 && tp.path.segments.len() >= 2
             {
                 let fn_name = tp.path.segments.last().unwrap().ident;
-                // Reconstruct the return type from the qualifier minus the last segment
-                // For A::B::method, the return type doesn't come from the path
-                // This is actually: the function has no explicit return type (constructor/destructor pattern)
-                // or the first segments are the qualifier.
-                // For now, treat the whole thing as a function with the last segment as name
+                // Build class_path from all segments except the last
+                let class_path = {
+                    let mut segments = tp.path.segments.clone();
+                    segments.pop();
+                    Some(Path {
+                        leading_colon: tp.path.leading_colon,
+                        segments,
+                    })
+                };
                 let inputs = parse_fn_params(p)?;
                 // Trailing qualifiers
                 let mut const_token = false;
@@ -1209,6 +1219,7 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
                             span: fn_name.span,
                             kind: FundamentalKind::Void,
                         }),
+                        class_path,
                         ident: fn_name,
                         inputs,
                         variadic: false,
@@ -1275,7 +1286,7 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
 
     // Parse name — could be a qualified path (e.g., Foo::bar, A::B::method)
     // or an operator overload (operator+), or a destructor (~Foo handled elsewhere)
-    let ident = if p.peek_kind() == Some(TokenKind::KeywordOperator) {
+    let (class_path, ident) = if p.peek_kind() == Some(TokenKind::KeywordOperator) {
         // operator overload: use span from 'operator' keyword through operator token
         let op_tok = p.bump()?;
         // Parse the operator symbol(s)
@@ -1307,10 +1318,13 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
         let start_r: core::ops::Range<usize> = op_tok.src_span().into();
         let end_r: core::ops::Range<usize> = end_span.into();
         let span = SourceSpan::new(p.src, start_r.start, end_r.end - start_r.start);
-        Ident {
-            sym: &p.src[start_r.start..end_r.end],
-            span,
-        }
+        (
+            None,
+            Ident {
+                sym: &p.src[start_r.start..end_r.end],
+                span,
+            },
+        )
     } else {
         // Regular ident, possibly qualified: Foo::bar
         let first = parse_ident(p)?;
@@ -1320,7 +1334,8 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
                 Some(TokenKind::Ident | TokenKind::Compl | TokenKind::KeywordOperator)
             )
         {
-            // Qualified name: consume all :: segments
+            // Qualified name: consume all :: segments, tracking qualifier
+            let mut qualifier_segments = vec![PathSegment { ident: first }];
             let mut last = first;
             while p.eat(TokenKind::DoubleColon).is_some() {
                 if p.peek_kind() == Some(TokenKind::Compl) {
@@ -1382,13 +1397,24 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
                     break;
                 } else if p.peek_kind() == Some(TokenKind::Ident) {
                     last = parse_ident(p)?;
+                    qualifier_segments.push(PathSegment { ident: last });
                 } else {
                     break;
                 }
             }
-            last
+            // The last segment in qualifier_segments is actually the function name, remove it
+            qualifier_segments.pop();
+            let class_path = if qualifier_segments.is_empty() {
+                None
+            } else {
+                Some(Path {
+                    leading_colon: false,
+                    segments: qualifier_segments,
+                })
+            };
+            (class_path, last)
         } else {
-            first
+            (None, first)
         }
     };
 
@@ -1476,6 +1502,7 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
             static_token,
             explicit_token,
             return_type,
+            class_path,
             ident,
             inputs,
             variadic: false,

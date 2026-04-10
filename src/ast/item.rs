@@ -213,6 +213,9 @@ pub struct Signature<'de> {
     pub explicit_token: bool,
     /// The return type (e.g. `int`, `void`, `auto`).
     pub return_type: Type<'de>,
+    /// Optional qualifying class/namespace path for out-of-line definitions.
+    /// For `void MyClass::myFunction()`, this is `MyClass`.
+    pub class_path: Option<Path<'de>>,
     /// The function name.
     pub ident: Ident<'de>,
     /// Function parameters, comma-separated.
