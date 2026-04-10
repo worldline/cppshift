@@ -5,6 +5,7 @@
 
 use std::collections::LinkedList;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 
 use crate::SourceSpan;
 use crate::lex::Token;
@@ -23,6 +24,18 @@ use super::ty::Type;
 pub struct Ident<'de> {
     pub sym: &'de str,
     pub span: SourceSpan<'de>,
+}
+
+impl<'de> PartialEq<str> for Ident<'de> {
+    fn eq(&self, sym: &str) -> bool {
+        self.sym == sym
+    }
+}
+
+impl<'de> Hash for Ident<'de> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.sym.hash(state);
+    }
 }
 
 impl<'de> fmt::Display for Ident<'de> {
