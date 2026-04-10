@@ -511,6 +511,7 @@ mod tests {
             let field_member_var = fields_named_iter.next();
             if let Some(Member::Field(field)) = field_member_var {
                 assert_eq!(Some("member_var"), field.ident.as_ref().map(|id| id.sym));
+                assert!(!field.static_token);
                 assert_eq!(field.default_value, None);
             } else {
                 panic!("Expected a field, got {:#?}", field_member_var);

@@ -106,6 +106,12 @@ pub fn visit_item<'de, V: Visit<'de> + ?Sized>(v: &mut V, item: &Item<'de>) {
                 v.visit_expr(expr);
             }
         }
+        Item::Var(i) => {
+            v.visit_type(&i.ty);
+            if let Some(expr) = &i.expr {
+                v.visit_expr(expr);
+            }
+        }
         Item::ForeignMod(i) => {
             for fi in &i.items {
                 match fi {

@@ -311,6 +311,8 @@ pub enum Item<'de> {
     Const(ItemConst<'de>),
     /// Static variable: `static int count;`
     Static(ItemStatic<'de>),
+    /// Variable declaration: `int x = 42;`
+    Var(ItemVar<'de>),
     /// Extern block: `extern "C" { ... }`
     ForeignMod(ItemForeignMod<'de>),
     /// Template declaration: `template<typename T> ...`
@@ -494,6 +496,21 @@ pub struct ItemConst<'de> {
 /// Example: `static int instance_count = 0;`
 #[derive(Debug, Clone, PartialEq)]
 pub struct ItemStatic<'de> {
+    /// C++20 attributes.
+    pub attrs: Vec<Attribute<'de>>,
+    /// The variable's type.
+    pub ty: Type<'de>,
+    /// The variable's name.
+    pub ident: Ident<'de>,
+    /// Optional initializer. `None` for uninitialized declarations.
+    pub expr: Option<Expr<'de>>,
+}
+
+/// A variable declaration (not `static`, not `const`/`constexpr`).
+///
+/// Example: `int x = 42;`
+#[derive(Debug, Clone, PartialEq)]
+pub struct ItemVar<'de> {
     /// C++20 attributes.
     pub attrs: Vec<Attribute<'de>>,
     /// The variable's type.

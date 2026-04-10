@@ -1084,17 +1084,17 @@ mod tests {
 
     #[test]
     fn char_array_from_string_literal() -> Result<(), TranspileError> {
-        // `const char` is parsed as a static with a const-qualified element type.
+        // `const char` is parsed as Const with a const-qualified element type.
         // The transpiler should infer the size (4 chars + null terminator = 5).
         let transpiler = Transpiler::default();
         let src = r#"const char listOfChars[] = "ALPN";"#;
         let file = parse_file(src).unwrap();
         match &file.items[0] {
-            crate::ast::Item::Static(s) => {
-                let out = s.transpile_token_stream(&transpiler)?.to_string();
-                assert_eq!(out, r#"pub static listOfChars : & str = "ALPN" ;"#);
+            crate::ast::Item::Const(c) => {
+                let out = c.transpile_token_stream(&transpiler)?.to_string();
+                assert_eq!(out, r#"pub const listOfChars : & str = "ALPN" ;"#);
             }
-            item => panic!("expected ItemStatic, got {item:?}"),
+            item => panic!("expected ItemConst, got {item:?}"),
         }
 
         Ok(())
@@ -1107,11 +1107,11 @@ mod tests {
         let src = r#"const char nl[] = "a\nb";"#;
         let file = parse_file(src).unwrap();
         match &file.items[0] {
-            crate::ast::Item::Static(s) => {
-                let out = s.transpile_token_stream(&transpiler)?.to_string();
-                assert_eq!(out, r#"pub static nl : & str = "a\nb" ;"#);
+            crate::ast::Item::Const(c) => {
+                let out = c.transpile_token_stream(&transpiler)?.to_string();
+                assert_eq!(out, r#"pub const nl : & str = "a\nb" ;"#);
             }
-            item => panic!("expected ItemStatic, got {item:?}"),
+            item => panic!("expected ItemConst, got {item:?}"),
         }
 
         Ok(())

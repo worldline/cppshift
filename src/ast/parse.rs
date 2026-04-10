@@ -337,6 +337,7 @@ fn set_item_attrs<'de>(mut item: Item<'de>, attrs: Vec<Attribute<'de>>) -> Item<
         Item::Typedef(t) => t.attrs = attrs,
         Item::Const(c) => c.attrs = attrs,
         Item::Static(s) => s.attrs = attrs,
+        Item::Var(v) => v.attrs = attrs,
         Item::ForeignMod(f) => f.attrs = attrs,
         Item::Template(t) => t.attrs = attrs,
         Item::StaticAssert(_) | Item::Include(_) | Item::Macro(_) | Item::Verbatim(_) => {}
@@ -1598,8 +1599,8 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
             })),
         }))
     } else {
-        // Regular variable — treat as static for now at file scope
-        Ok(Item::Static(ItemStatic {
+        // Regular variable declaration (not static, not const)
+        Ok(Item::Var(ItemVar {
             attrs: Vec::new(),
             ty: return_type,
             ident,
@@ -1609,7 +1610,13 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
 }
 
 fn is_const_type(ty: &Type) -> bool {
-    matches!(ty, Type::Qualified(q) if q.cv.const_token)
+    match ty {
+        Type::Qualified(q) => q.cv.const_token,
+        Type::Ptr(p) => is_const_type(&p.pointee),
+        Type::Reference(r) => is_const_type(&r.referent),
+        Type::Array(a) => is_const_type(&a.element),
+        _ => false,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2081,6 +2088,16 @@ fn parse_fields_named<'de>(
                     ty: c.ty,
                     ident: Some(c.ident),
                     default_value: Some(c.expr),
+                }));
+            }
+            Item::Var(v) => {
+                members.push(Member::Field(Field {
+                    attrs: Vec::new(),
+                    vis: current_vis,
+                    static_token: false,
+                    ty: v.ty,
+                    ident: Some(v.ident),
+                    default_value: v.expr,
                 }));
             }
             other => members.push(Member::Item(Box::new(other))),
@@ -4606,13 +4623,12 @@ mod tests {
     #[test]
     fn parse_string_concat() {
         let file = parse("const char* s = \"hello\" \" \" \"world\";");
-        // const char* is a pointer to const char, parsed as Static (not Const)
         match &file.items[0] {
-            Item::Static(s) => match s.expr.as_ref().unwrap() {
+            Item::Const(c) => match &c.expr {
                 Expr::Lit(lit) => assert_eq!(lit.kind, LitKind::String),
                 other => panic!("expected Lit, got {other:?}"),
             },
-            other => panic!("expected Static, got {other:?}"),
+            other => panic!("expected Const, got {other:?}"),
         }
     }
 
