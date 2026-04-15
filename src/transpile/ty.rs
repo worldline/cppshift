@@ -972,7 +972,7 @@ mod tests {
     #[test]
     fn const_int_transpiles() -> Result<(), TranspileError> {
         let transpiler = Transpiler::default();
-        let src = "const int MAX = 100;";
+        let src = "const int MAX = 100;\nconst int MyClass::MIN = 10;";
         let file = parse_file(src).unwrap();
         match &file.items[0] {
             crate::ast::Item::Const(c) => {
@@ -980,6 +980,13 @@ mod tests {
                     c.transpile_token_stream(&transpiler)?.to_string(),
                     "# [doc = concat ! (\" Auto-transpiled const literal \" , stringify ! (i32))] pub const MAX : i32 = 100 ;"
                 );
+            }
+            item => panic!("expected ItemConst, got {item:?}"),
+        }
+        match &file.items[1] {
+            crate::ast::Item::Const(c) => {
+                let class_path = c.class_path.as_ref().expect("expected class_path");
+                assert_eq!(class_path.segments[0].ident.sym, "MyClass");
             }
             item => panic!("expected ItemConst, got {item:?}"),
         }
@@ -1068,7 +1075,7 @@ mod tests {
     #[test]
     fn static_int_transpiles() -> Result<(), TranspileError> {
         let transpiler = Transpiler::default();
-        let src = "static int count = 0;";
+        let src = "static int count = 0;\nstatic int MyClass::instance = 42;";
         let file = parse_file(src).unwrap();
         match &file.items[0] {
             crate::ast::Item::Static(s) => {
@@ -1076,6 +1083,15 @@ mod tests {
                     s.transpile_token_stream(&transpiler)?.to_string(),
                     "# [doc = concat ! (\" Auto-transpiled static literal \" , stringify ! (i32))] pub static count : i32 = 0 ;"
                 );
+                assert!(s.class_path.is_none());
+            }
+            item => panic!("expected ItemStatic, got {item:?}"),
+        }
+        match &file.items[1] {
+            crate::ast::Item::Static(s) => {
+                let class_path = s.class_path.as_ref().expect("expected class_path");
+                assert_eq!(class_path.segments[0].ident.sym, "MyClass");
+                assert_eq!(s.ident.sym, "instance");
             }
             item => panic!("expected ItemStatic, got {item:?}"),
         }

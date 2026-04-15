@@ -542,6 +542,9 @@ pub struct ItemConst<'de> {
     pub constexpr_token: bool,
     /// The constant's type.
     pub ty: Type<'de>,
+    /// Optional qualifying class path.
+    /// For `const int MyClass::MIN = 10;`, this is `MyClass`.
+    pub class_path: Option<Path<'de>>,
     /// The constant's name.
     pub ident: Ident<'de>,
     /// The initializer expression.
@@ -557,6 +560,9 @@ pub struct ItemStatic<'de> {
     pub attrs: Vec<Attribute<'de>>,
     /// The variable's type.
     pub ty: Type<'de>,
+    /// Optional qualifying class path.
+    /// For `static int MyClass::count = 0;`, this is `MyClass`.
+    pub class_path: Option<Path<'de>>,
     /// The variable's name.
     pub ident: Ident<'de>,
     /// Optional initializer. `None` for uninitialized declarations.

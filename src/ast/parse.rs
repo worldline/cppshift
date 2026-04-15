@@ -1054,6 +1054,7 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
         return Ok(Item::Static(ItemStatic {
             attrs: Vec::new(),
             ty: fn_ptr_type,
+            class_path: None,
             ident: fp_ident,
             expr,
         }));
@@ -1653,6 +1654,7 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
         Ok(Item::Static(ItemStatic {
             attrs: Vec::new(),
             ty: return_type,
+            class_path,
             ident,
             expr,
         }))
@@ -1661,6 +1663,7 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
             attrs: Vec::new(),
             constexpr_token,
             ty: return_type,
+            class_path,
             ident,
             expr: expr.unwrap_or(Expr::Lit(ExprLit {
                 span: ident.span,
