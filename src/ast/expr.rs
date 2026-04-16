@@ -2,6 +2,8 @@
 //!
 //! Analogous to `syn::Expr`.
 
+use std::str::FromStr;
+
 use crate::SourceSpan;
 use crate::ast::ty::{FundamentalKind, Type};
 
@@ -192,6 +194,16 @@ pub enum Expr<'de> {
 pub struct ExprLit<'de> {
     pub span: SourceSpan<'de>,
     pub kind: LitKind,
+}
+
+impl<'de> ExprLit<'de> {
+    /// Parse the literal value from the source span as the specified type.
+    pub fn parse<F>(&self) -> Result<F, F::Err>
+    where
+        F: FromStr,
+    {
+        self.span.src().parse::<F>()
+    }
 }
 
 /// Simple identifier expression.

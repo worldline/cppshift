@@ -344,22 +344,24 @@ mod tests {
 
                 // case 1:
                 if let Stmt::Case(StmtCase {
-                    value: Expr::Lit(ExprLit { span, kind }),
+                    value: Expr::Lit(expr_lit),
                 }) = switch_stmts.next().unwrap()
                 {
-                    assert_eq!(*kind, LitKind::Integer);
-                    assert_eq!(span.src(), "1");
+                    assert_eq!(expr_lit.kind, LitKind::Integer);
+                    assert_eq!(expr_lit.span.src(), "1");
+                    assert_eq!(expr_lit.parse::<i32>(), Ok(1));
                 } else {
                     panic!("Expected case 1");
                 }
 
                 // case 2:
                 if let Stmt::Case(StmtCase {
-                    value: Expr::Lit(ExprLit { span, kind }),
+                    value: Expr::Lit(expr_lit),
                 }) = switch_stmts.next().unwrap()
                 {
-                    assert_eq!(*kind, LitKind::Integer);
-                    assert_eq!(span.src(), "2");
+                    assert_eq!(expr_lit.kind, LitKind::Integer);
+                    assert_eq!(expr_lit.span.src(), "2");
+                    assert_eq!(expr_lit.parse::<u16>(), Ok(2));
                 } else {
                     panic!("Expected case 2");
                 }
