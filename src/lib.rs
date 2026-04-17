@@ -40,6 +40,13 @@ impl<'de> SourceSpan<'de> {
     pub fn full_source(&self) -> &'de str {
         self.src
     }
+
+    /// Extend this span to include another span, returning a new span that covers both.
+    pub fn extend(&self, other: SourceSpan<'de>) -> SourceSpan<'de> {
+        let start = self.offset.min(other.offset);
+        let end = (self.offset + self.len).max(other.offset + other.len);
+        SourceSpan::new(self.src, start, end - start)
+    }
 }
 
 impl<'de> fmt::Debug for SourceSpan<'de> {

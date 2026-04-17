@@ -117,6 +117,11 @@ impl<'de> Transpile for Expr<'de> {
                 operand.transpile(transpiler, &mut inner_tokens)?;
                 tokens.extend(quote::quote!(- #inner_tokens));
             }
+            Expr::Binary(ExprBinary { lhs, op, rhs }) => {
+                lhs.transpile(transpiler, tokens)?;
+                op.transpile(transpiler, tokens)?;
+                rhs.transpile(transpiler, tokens)?;
+            }
             Expr::Paren(ExprParen { expr }) => {
                 let mut inner_tokens = TokenStream::new();
                 expr.transpile(transpiler, &mut inner_tokens)?;

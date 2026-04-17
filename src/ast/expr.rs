@@ -200,6 +200,13 @@ impl<'de> Expr<'de> {
             Expr::Ident(ExprIdent { ident }) => Some(ident.span),
             Expr::Paren(expr_paren) => expr_paren.expr.span(),
             Expr::Call(expr_call) => expr_call.func.span(),
+            Expr::Binary(expr_binary) => expr_binary.lhs.span().map(|l| {
+                if let Some(r) = expr_binary.rhs.span() {
+                    l.extend(r)
+                } else {
+                    l
+                }
+            }),
             _ => None,
         }
     }
