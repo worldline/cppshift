@@ -189,6 +189,22 @@ pub enum Expr<'de> {
     InitList(ExprInitList<'de>),
 }
 
+impl<'de> Expr<'de> {
+    /// Get the source span of the expression, if available.
+    pub fn span(&self) -> Option<SourceSpan<'de>> {
+        match self {
+            Expr::Lit(ExprLit { span, .. })
+            | Expr::Bool(ExprBool { span, .. })
+            | Expr::Nullptr(ExprNullptr { span, .. })
+            | Expr::This(ExprThis { span, .. }) => Some(*span),
+            Expr::Ident(ExprIdent { ident }) => Some(ident.span),
+            Expr::Paren(expr_paren) => expr_paren.expr.span(),
+            Expr::Call(expr_call) => expr_call.func.span(),
+            _ => None,
+        }
+    }
+}
+
 /// Literal expression: numbers, strings, chars.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ExprLit<'de> {

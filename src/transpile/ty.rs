@@ -9,7 +9,6 @@ use crate::ast::ItemTypedef;
 use crate::ast::expr::{Expr, ExprLit, LitKind};
 use crate::ast::item::{ItemConst, ItemStatic, Path};
 use crate::ast::ty::{FundamentalKind, TemplateArg, Type};
-use crate::transpile::expr::expr_span;
 use crate::transpile::{Transpile, Transpiler};
 
 use super::error::TranspileError;
@@ -266,34 +265,17 @@ fn unmapped_path_error(path_str: &str, path: &Path<'_>) -> TranspileError {
 
 /// Build an [`TranspileError::UnsupportedType`] by extracting the best span from a [`Type`].
 fn unsupported_from_type(message: &str, ty: &Type<'_>) -> TranspileError {
-    match type_span(ty) {
+    match ty.span() {
         Some(span) => TranspileError::UnsupportedType {
             message: message.to_owned(),
             src: span.full_source().to_owned(),
             err_span: span.into(),
         },
         None => TranspileError::UnsupportedType {
-            message: message.to_owned(),
+            message: format!("{}: {:?}", message, ty),
             src: String::new(),
             err_span: miette::SourceSpan::new(0.into(), 0),
         },
-    }
-}
-
-/// Extract the most relevant source span from a type, if available.
-fn type_span<'de>(ty: &Type<'de>) -> Option<crate::SourceSpan<'de>> {
-    match ty {
-        Type::Fundamental(f) => Some(f.span),
-        Type::Path(p) => p.path.segments.first().map(|s| s.ident.span),
-        Type::Auto(a) => Some(a.span),
-        Type::Decltype(d) => expr_span(&d.expr),
-        Type::Ptr(p) => type_span(&p.pointee),
-        Type::Reference(r) => type_span(&r.referent),
-        Type::RvalueReference(r) => type_span(&r.referent),
-        Type::Array(a) => type_span(&a.element),
-        Type::FnPtr(f) => type_span(&f.return_type),
-        Type::Qualified(q) => type_span(&q.ty),
-        Type::TemplateInst(t) => t.path.segments.first().map(|s| s.ident.span),
     }
 }
 

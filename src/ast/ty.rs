@@ -76,6 +76,23 @@ impl<'de> Type<'de> {
             _ => false,
         }
     }
+
+    /// Extract the most relevant source span from a type, if available.
+    pub fn span(&self) -> Option<SourceSpan<'de>> {
+        match self {
+            Type::Fundamental(f) => Some(f.span),
+            Type::Path(p) => p.path.segments.first().map(|s| s.ident.span),
+            Type::Auto(a) => Some(a.span),
+            Type::Decltype(d) => d.expr.span(),
+            Type::Ptr(p) => p.pointee.span(),
+            Type::Reference(r) => r.referent.span(),
+            Type::RvalueReference(r) => r.referent.span(),
+            Type::Array(a) => a.element.span(),
+            Type::FnPtr(f) => f.return_type.span(),
+            Type::Qualified(q) => q.ty.span(),
+            Type::TemplateInst(t) => t.path.segments.first().map(|s| s.ident.span),
+        }
+    }
 }
 
 /// A fundamental (built-in) type.

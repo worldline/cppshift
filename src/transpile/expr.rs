@@ -61,26 +61,16 @@ impl Transpile for BinaryOp {
     }
 }
 
-/// Extract a source span from an expression (best-effort).
-pub(crate) fn expr_span<'de>(expr: &Expr<'de>) -> Option<crate::SourceSpan<'de>> {
-    match expr {
-        Expr::Lit(l) => Some(l.span),
-        Expr::Ident(i) => Some(i.ident.span),
-        Expr::Path(p) => p.path.segments.first().map(|s| s.ident.span),
-        _ => None,
-    }
-}
-
 /// Build a [`TranspileError::UnsupportedExpr`] from an expression.
 pub(crate) fn unsupported_from_expr(message: &str, expr: &Expr<'_>) -> TranspileError {
-    match expr_span(expr) {
+    match expr.span() {
         Some(span) => TranspileError::UnsupportedExpr {
             message: message.to_owned(),
             src: span.full_source().to_owned(),
             err_span: span.into(),
         },
         None => TranspileError::UnsupportedExpr {
-            message: message.to_owned(),
+            message: format!("{}: {:?}", message, expr),
             src: String::new(),
             err_span: miette::SourceSpan::new(0.into(), 0),
         },
