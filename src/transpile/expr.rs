@@ -1,10 +1,65 @@
 use proc_macro2::TokenStream;
 use quote::ToTokens;
 
-use crate::ast::expr::{Expr, ExprBool, ExprNullptr, ExprParen, ExprUnary, UnaryOp};
+use crate::ast::expr::{
+    BinaryOp, Expr, ExprBinary, ExprBool, ExprNullptr, ExprParen, ExprUnary, UnaryOp,
+};
 use crate::transpile::{Transpile, Transpiler};
 
 use super::error::TranspileError;
+
+impl Transpile for BinaryOp {
+    fn transpile(
+        &self,
+        _transpiler: &Transpiler,
+        tokens: &mut TokenStream,
+    ) -> Result<(), TranspileError> {
+        match self {
+            // Arithmetic
+            BinaryOp::Add => tokens.extend(quote::quote!(+)),
+            BinaryOp::Sub => tokens.extend(quote::quote!(-)),
+            BinaryOp::Mul => tokens.extend(quote::quote!(*)),
+            BinaryOp::Div => tokens.extend(quote::quote!(/)),
+            BinaryOp::Mod => tokens.extend(quote::quote!(%)),
+            // Comparison
+            BinaryOp::Less => tokens.extend(quote::quote!(<)),
+            BinaryOp::LessEqual => tokens.extend(quote::quote!(<=)),
+            BinaryOp::Greater => tokens.extend(quote::quote!(>)),
+            BinaryOp::GreaterEqual => tokens.extend(quote::quote!(>=)),
+            BinaryOp::ThreeWay => tokens.extend(quote::quote!(<=>)),
+            BinaryOp::Equal => tokens.extend(quote::quote!(==)),
+            BinaryOp::NotEqual => tokens.extend(quote::quote!(!=)),
+            // Bitwise
+            BinaryOp::BitAnd => tokens.extend(quote::quote!(&)),
+            BinaryOp::BitXor => tokens.extend(quote::quote!(^)),
+            BinaryOp::BitOr => tokens.extend(quote::quote!(|)),
+            // Logical
+            BinaryOp::LogicalAnd => tokens.extend(quote::quote!(&&)),
+            BinaryOp::LogicalOr => tokens.extend(quote::quote!(||)),
+            // Assignment
+            BinaryOp::Assign => tokens.extend(quote::quote!(=)),
+            BinaryOp::AddAssign => tokens.extend(quote::quote!(+=)),
+            BinaryOp::SubAssign => tokens.extend(quote::quote!(-=)),
+            BinaryOp::MulAssign => tokens.extend(quote::quote!(*=)),
+            BinaryOp::DivAssign => tokens.extend(quote::quote!(/=)),
+            BinaryOp::ModAssign => tokens.extend(quote::quote!(%=)),
+            BinaryOp::ShiftLeftAssign => tokens.extend(quote::quote!(<<=)),
+            BinaryOp::ShiftRightAssign => tokens.extend(quote::quote!(>>=)),
+            BinaryOp::BitAndAssign => tokens.extend(quote::quote!(&=)),
+            BinaryOp::BitXorAssign => tokens.extend(quote::quote!(^=)),
+            BinaryOp::BitOrAssign => tokens.extend(quote::quote!(|=)),
+            _ => {
+                return Err(TranspileError::UnsupportedExpr {
+                    message: format!("binary operator `{self:?}` cannot be transpiled to Rust"),
+                    src: String::new(),
+                    err_span: miette::SourceSpan::new(0.into(), 0),
+                });
+            }
+        }
+
+        Ok(())
+    }
+}
 
 /// Extract a source span from an expression (best-effort).
 pub(crate) fn expr_span<'de>(expr: &Expr<'de>) -> Option<crate::SourceSpan<'de>> {
@@ -86,5 +141,17 @@ impl<'de> Transpile for Expr<'de> {
         }
 
         Ok(())
+    }
+}
+
+impl<'de> Transpile for ExprBinary<'de> {
+    fn transpile(
+        &self,
+        transpiler: &Transpiler,
+        tokens: &mut TokenStream,
+    ) -> Result<(), TranspileError> {
+        self.lhs.transpile(transpiler, tokens)?;
+        self.op.transpile(transpiler, tokens)?;
+        self.rhs.transpile(transpiler, tokens)
     }
 }

@@ -1,6 +1,9 @@
 use proc_macro2::TokenStream;
 
-use crate::{ast::stmt::StmtLocal, transpile::{Transpile, TranspileError, Transpiler}};
+use crate::{
+    ast::stmt::StmtLocal,
+    transpile::{Transpile, TranspileError, Transpiler},
+};
 
 impl<'de> Transpile for StmtLocal<'de> {
     fn transpile(
@@ -39,11 +42,15 @@ mod tests {
         }";
         let file = parse_file(src).unwrap();
         match &file.items[0] {
-            ast::Item::Fn(ast::ItemFn { block: Some(block), ..}) => if let ast::Stmt::Local(stmt) = &block.stmts[0] {
-                assert_eq!(
-                    stmt.transpile_token_stream(&transpiler)?.to_string(),
-                    "let mut x : i32 = 5 ;"
-                );
+            ast::Item::Fn(ast::ItemFn {
+                block: Some(block), ..
+            }) => {
+                if let ast::Stmt::Local(stmt) = &block.stmts[0] {
+                    assert_eq!(
+                        stmt.transpile_token_stream(&transpiler)?.to_string(),
+                        "let mut x : i32 = 5 ;"
+                    );
+                }
             }
             item => panic!("expected ItemStmt, got {item:?}"),
         }
