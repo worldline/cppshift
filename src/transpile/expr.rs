@@ -128,10 +128,14 @@ impl<'de> Transpile for Expr<'de> {
                 tokens.extend(quote::quote!((#inner_tokens)));
             }
             other => {
-                return Err(unsupported_from_expr(
-                    "expression cannot be transpiled to Rust",
-                    other,
-                ));
+                return if let Some(handler) = &transpiler.fallback_expr_handler {
+                    handler(other, transpiler, tokens)
+                } else {
+                    Err(unsupported_from_expr(
+                        "expression cannot be transpiled to Rust",
+                        other,
+                    ))
+                };
             }
         }
 

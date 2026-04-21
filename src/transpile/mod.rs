@@ -6,15 +6,24 @@ pub mod item;
 pub mod stmt;
 pub mod ty;
 
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::Arc};
 
 pub use error::TranspileError;
 use proc_macro2::TokenStream;
 use serde::Deserialize;
 pub use ty::*;
 
+use crate::ast::Expr;
+
+/// Type alias for the fallback expression handler.
+type FallbackExprHandler = Arc<
+    dyn for<'de> Fn(&Expr<'de>, &Transpiler, &mut TokenStream) -> Result<(), TranspileError>
+        + Send
+        + Sync,
+>;
+
 /// Transpiler struct, which is the configuration entrypoint for all transpilation operations.
-#[derive(Debug, Default, Clone, Deserialize)]
+#[derive(Default, Clone, Deserialize)]
 pub struct Transpiler {
     /// List of type we don't want to transpile
     #[serde(default)]
@@ -22,6 +31,22 @@ pub struct Transpiler {
     /// Type mapper to map C++ types to Rust types
     #[serde(default)]
     pub ty_mapper: TypeMapper,
+    /// Optional fallback handler for otherwise-unsupported expressions
+    #[serde(skip)]
+    pub fallback_expr_handler: Option<FallbackExprHandler>,
+}
+
+impl std::fmt::Debug for Transpiler {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Transpiler")
+            .field("skip_types", &self.skip_types)
+            .field("ty_mapper", &self.ty_mapper)
+            .field(
+                "fallback_expr_handler",
+                &self.fallback_expr_handler.as_ref().map(|_| "<closure>"),
+            )
+            .finish()
+    }
 }
 
 pub trait Transpile {
