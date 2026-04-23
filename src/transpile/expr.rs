@@ -1,6 +1,7 @@
 use proc_macro2::TokenStream;
 use quote::ToTokens;
 
+use crate::SourceCodeSpan as _;
 use crate::ast::expr::{
     BinaryOp, Expr, ExprBinary, ExprBool, ExprNullptr, ExprParen, ExprUnary, UnaryOp,
 };

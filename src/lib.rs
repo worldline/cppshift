@@ -74,6 +74,11 @@ impl<'de> From<SourceSpan<'de>> for core::ops::Range<usize> {
     }
 }
 
+pub trait SourceCodeSpan<'de> {
+    /// Get the source span, if available.
+    fn span(&self) -> Option<SourceSpan<'de>>;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

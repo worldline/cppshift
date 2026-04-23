@@ -4,8 +4,8 @@
 
 use std::str::FromStr;
 
-use crate::SourceSpan;
 use crate::ast::ty::{FundamentalKind, Type};
+use crate::{SourceCodeSpan, SourceSpan};
 
 use super::item::{Ident, Path};
 use super::punct::Punctuated;
@@ -189,9 +189,8 @@ pub enum Expr<'de> {
     InitList(ExprInitList<'de>),
 }
 
-impl<'de> Expr<'de> {
-    /// Get the source span of the expression, if available.
-    pub fn span(&self) -> Option<SourceSpan<'de>> {
+impl<'de> SourceCodeSpan<'de> for Expr<'de> {
+    fn span(&self) -> Option<SourceSpan<'de>> {
         match self {
             Expr::Lit(ExprLit { span, .. })
             | Expr::Bool(ExprBool { span, .. })
@@ -199,14 +198,13 @@ impl<'de> Expr<'de> {
             | Expr::This(ExprThis { span, .. }) => Some(*span),
             Expr::Ident(ExprIdent { ident }) => Some(ident.span),
             Expr::Paren(expr_paren) => expr_paren.expr.span(),
-            Expr::Call(expr_call) => expr_call.func.span(),
-            Expr::Binary(expr_binary) => expr_binary.lhs.span().map(|l| {
-                if let Some(r) = expr_binary.rhs.span() {
-                    l.extend(r)
-                } else {
-                    l
-                }
-            }),
+            Expr::Unary(expr_unary) => expr_unary.span(),
+            Expr::Binary(expr_binary) => expr_binary.span(),
+            Expr::Conditional(expr_conditional) => expr_conditional.span(),
+            Expr::Call(expr_call) => expr_call.span(),
+            Expr::Sizeof(expr_sizeof) => expr_sizeof.operand.span(),
+            Expr::Alignof(expr_alignof) => expr_alignof.ty.span(),
+            Expr::Typeid(expr_typeid) => expr_typeid.operand.span(),
             _ => None,
         }
     }
@@ -273,12 +271,30 @@ pub struct ExprUnary<'de> {
     pub operand: Box<Expr<'de>>,
 }
 
+impl<'de> SourceCodeSpan<'de> for ExprUnary<'de> {
+    fn span(&self) -> Option<SourceSpan<'de>> {
+        self.operand.span()
+    }
+}
+
 /// Binary expression: `lhs op rhs`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExprBinary<'de> {
     pub lhs: Box<Expr<'de>>,
     pub op: BinaryOp,
     pub rhs: Box<Expr<'de>>,
+}
+
+impl<'de> SourceCodeSpan<'de> for ExprBinary<'de> {
+    fn span(&self) -> Option<SourceSpan<'de>> {
+        self.lhs.span().map(|l| {
+            if let Some(r) = self.rhs.span() {
+                l.extend(r)
+            } else {
+                l
+            }
+        })
+    }
 }
 
 /// Ternary conditional: `condition ? then_expr : else_expr`.
@@ -289,6 +305,20 @@ pub struct ExprConditional<'de> {
     pub else_expr: Box<Expr<'de>>,
 }
 
+impl<'de> SourceCodeSpan<'de> for ExprConditional<'de> {
+    fn span(&self) -> Option<SourceSpan<'de>> {
+        self.condition.span().map(|c| {
+            if let Some(e) = self.else_expr.span() {
+                c.extend(e)
+            } else if let Some(t) = self.then_expr.span() {
+                c.extend(t)
+            } else {
+                c
+            }
+        })
+    }
+}
+
 /// Function call: `callee(args...)`.
 ///
 /// Analogous to `syn::ExprCall`.
@@ -296,6 +326,20 @@ pub struct ExprConditional<'de> {
 pub struct ExprCall<'de> {
     pub func: Box<Expr<'de>>,
     pub args: Punctuated<'de, Expr<'de>>,
+}
+
+impl<'de> SourceCodeSpan<'de> for ExprCall<'de> {
+    fn span(&self) -> Option<SourceSpan<'de>> {
+        if let Some(func_span) = self.func.span() {
+            if let Some(args_span) = self.args.span() {
+                Some(func_span.extend(args_span))
+            } else {
+                Some(func_span)
+            }
+        } else {
+            self.args.span()
+        }
+    }
 }
 
 /// Method call: `receiver.method(args...)`.
@@ -424,6 +468,15 @@ pub struct ExprTypeid<'de> {
 pub enum TypeidOperand<'de> {
     Type(Box<super::ty::Type<'de>>),
     Expr(Box<Expr<'de>>),
+}
+
+impl<'de> SourceCodeSpan<'de> for TypeidOperand<'de> {
+    fn span(&self) -> Option<SourceSpan<'de>> {
+        match &self {
+            TypeidOperand::Type(op_type) => op_type.span(),
+            TypeidOperand::Expr(op_expr) => op_expr.span(),
+        }
+    }
 }
 
 /// Braced initializer list: `{1, 2, 3}`.

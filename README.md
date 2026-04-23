@@ -32,3 +32,11 @@ To parse a C++ source file and inspect the AST decomposition, run the _ast_ exam
 ```bash
 cargo run --example ast -- <source_path>
 ```
+
+## Transpiler
+
+The transpiler contains all trait implementations for C++ to Rust transpilation.
+There are no examples available.
+
+You need to configure all the settings in the `Transpiler`.
+After that, you will be able to transpile any C++ structure you have.

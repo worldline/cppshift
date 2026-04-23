@@ -2,7 +2,7 @@
 //!
 //! Analogous to `syn::Type`.
 
-use crate::SourceSpan;
+use crate::{SourceCodeSpan, SourceSpan};
 
 use super::expr::Expr;
 use super::item::Path;
@@ -76,9 +76,10 @@ impl<'de> Type<'de> {
             _ => false,
         }
     }
+}
 
-    /// Extract the most relevant source span from a type, if available.
-    pub fn span(&self) -> Option<SourceSpan<'de>> {
+impl<'de> SourceCodeSpan<'de> for Type<'de> {
+    fn span(&self) -> Option<SourceSpan<'de>> {
         match self {
             Type::Fundamental(f) => Some(f.span),
             Type::Path(p) => p.path.segments.first().map(|s| s.ident.span),

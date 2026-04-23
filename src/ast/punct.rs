@@ -4,7 +4,7 @@
 
 use std::slice;
 
-use crate::lex::Token;
+use crate::{SourceCodeSpan, SourceSpan, lex::Token};
 
 /// A sequence of syntax tree nodes of type `T` separated by punctuation tokens.
 ///
@@ -59,6 +59,23 @@ impl<'de, T> Punctuated<'de, T> {
     /// Convert into a Vec of just the values.
     pub fn into_values(self) -> Vec<T> {
         self.inner.into_iter().map(|(v, _)| v).collect()
+    }
+}
+
+impl<'de, T: SourceCodeSpan<'de>> SourceCodeSpan<'de> for Punctuated<'de, T> {
+    fn span(&self) -> Option<SourceSpan<'de>> {
+        let mut span: Option<SourceSpan<'de>> = None;
+        for punctuate in &self.inner {
+            if let Some(span) = span {
+                if let Some(inner_span) = punctuate.0.span() {
+                    span.extend(inner_span);
+                }
+            } else {
+                span = punctuate.0.span();
+            }
+        }
+
+        span
     }
 }
 

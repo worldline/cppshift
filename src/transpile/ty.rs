@@ -5,6 +5,7 @@ use quote::ToTokens as _;
 use serde::Deserialize;
 use serde::de::{self, MapAccess, Visitor};
 
+use crate::SourceCodeSpan as _;
 use crate::ast::ItemTypedef;
 use crate::ast::expr::{Expr, ExprLit, LitKind};
 use crate::ast::item::{ItemConst, ItemStatic, Path};
