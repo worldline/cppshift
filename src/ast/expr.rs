@@ -202,6 +202,7 @@ impl<'de> SourceCodeSpan<'de> for Expr<'de> {
             Expr::Binary(expr_binary) => expr_binary.span(),
             Expr::Conditional(expr_conditional) => expr_conditional.span(),
             Expr::Call(expr_call) => expr_call.span(),
+            Expr::MethodCall(expr_method_call) => expr_method_call.span(),
             Expr::Sizeof(expr_sizeof) => expr_sizeof.operand.span(),
             Expr::Alignof(expr_alignof) => expr_alignof.ty.span(),
             Expr::Typeid(expr_typeid) => expr_typeid.operand.span(),
@@ -351,6 +352,20 @@ pub struct ExprMethodCall<'de> {
     pub arrow: bool,
     pub method: Ident<'de>,
     pub args: Punctuated<'de, Expr<'de>>,
+}
+
+impl<'de> SourceCodeSpan<'de> for ExprMethodCall<'de> {
+    fn span(&self) -> Option<SourceSpan<'de>> {
+        if let Some(receiver_span) = self.receiver.span() {
+            if let Some(args_span) = self.args.span() {
+                Some(receiver_span.extend(args_span))
+            } else {
+                Some(receiver_span.extend(self.method.span))
+            }
+        } else {
+            Some(self.method.span)
+        }
+    }
 }
 
 /// Array subscript: `object[index]`.

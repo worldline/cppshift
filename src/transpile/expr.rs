@@ -62,8 +62,8 @@ impl Transpile for BinaryOp {
     }
 }
 
-/// Build a [`TranspileError::UnsupportedExpr`] from an expression.
-pub(crate) fn unsupported_from_expr(message: &str, expr: &Expr<'_>) -> TranspileError {
+/// Build a [`TranspileError::UnsupportedExpr`] from an expression, with the correct span information if available.
+pub fn unsupported_from_expr(message: &str, expr: &Expr<'_>) -> TranspileError {
     match expr.span() {
         Some(span) => TranspileError::UnsupportedExpr {
             message: message.to_owned(),
@@ -87,12 +87,8 @@ impl<'de> Transpile for Expr<'de> {
     ) -> Result<(), TranspileError> {
         match self {
             Expr::Lit(lit) => {
-                let rust_expr: syn::Expr = syn::parse_str(lit.span.src()).map_err(|_| {
-                    TranspileError::UnsupportedExpr {
-                        message: "cannot parse literal".to_owned(),
-                        src: lit.span.full_source().to_owned(),
-                        err_span: lit.span.into(),
-                    }
+                let rust_expr: syn::Expr = syn::parse_str(lit.span.src()).map_err(|e| {
+                    unsupported_from_expr(&format!("cannot parse literal: {e}"), self)
                 })?;
                 tokens.extend(quote::quote!(#rust_expr));
             }
@@ -106,8 +102,9 @@ impl<'de> Transpile for Expr<'de> {
                 i.ident.to_tokens(tokens);
             }
             Expr::Path(p) => {
-                let rust_expr = syn::Expr::try_from(p.path.clone())
-                    .map_err(|_| unsupported_from_expr("cannot transpile path expression", self))?;
+                let rust_expr = syn::Expr::try_from(p.path.clone()).map_err(|e| {
+                    unsupported_from_expr(&format!("cannot transpile path expression: {e}"), self)
+                })?;
                 tokens.extend(quote::quote!(#rust_expr));
             }
             Expr::Unary(ExprUnary {
