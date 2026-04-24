@@ -26,6 +26,18 @@ pub struct Ident<'de> {
     pub span: SourceSpan<'de>,
 }
 
+impl<'de> PartialEq<str> for Ident<'de> {
+    fn eq(&self, sym: &str) -> bool {
+        self.sym == sym
+    }
+}
+
+impl<'de> PartialEq<Ident<'de>> for str {
+    fn eq(&self, ident: &Ident<'de>) -> bool {
+        self == ident.sym
+    }
+}
+
 impl<'de> PartialEq<&str> for Ident<'de> {
     fn eq(&self, sym: &&str) -> bool {
         self.sym == *sym
