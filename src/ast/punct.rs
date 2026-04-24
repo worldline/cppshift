@@ -21,6 +21,11 @@ impl<'de, T> Punctuated<'de, T> {
         Punctuated { inner: Vec::new() }
     }
 
+    /// Get the first value in the sequence, if it exists.
+    pub fn first(&self) -> Option<&T> {
+        self.inner.first().map(|(v, _)| v)
+    }
+
     /// Push a value without trailing punctuation.
     pub fn push_value(&mut self, value: T) {
         self.inner.push((value, None));
