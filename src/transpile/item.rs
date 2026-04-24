@@ -103,9 +103,9 @@ impl<'de> Transpile for ItemEnum<'de> {
         let repr_attr = match &self.underlying_type {
             Some(ty) => {
                 let rust_ty = transpiler.ty_mapper.map_type(ty)?;
-                Some(quote::quote! { #[repr(#rust_ty)] })
+                quote::quote! { #[repr(#rust_ty)] }
             }
-            None => None,
+            None => quote::quote! { #[repr(i32)] },
         };
 
         // Build variant tokens
@@ -123,6 +123,7 @@ impl<'de> Transpile for ItemEnum<'de> {
 
         tokens.extend(quote::quote! {
             #[doc = concat!(" Auto-transpiled enum for ", stringify!(#name))]
+            #[derive(Debug, Clone, Copy, PartialEq, Eq)]
             #repr_attr
             pub enum #name { #variant_tokens }
         });
@@ -149,7 +150,7 @@ mod tests {
             crate::ast::Item::Enum(e) => {
                 assert_eq!(
                     e.transpile_token_stream(&transpiler)?.to_string(),
-                    "# [doc = concat ! (\" Auto-transpiled enum for \" , stringify ! (Color))] pub enum Color { Red , Green , Blue , }"
+                    "# [doc = concat ! (\" Auto-transpiled enum for \" , stringify ! (Color))] # [derive (Debug , Clone , Copy , PartialEq , Eq)] # [repr (i32)] pub enum Color { Red , Green , Blue , }"
                 );
             }
             item => panic!("expected ItemEnum, got {item:?}"),
@@ -167,7 +168,7 @@ mod tests {
             crate::ast::Item::Enum(e) => {
                 assert_eq!(
                     e.transpile_token_stream(&transpiler)?.to_string(),
-                    "# [doc = concat ! (\" Auto-transpiled enum for \" , stringify ! (Color))] # [repr (i32)] pub enum Color { Red , Green , Blue , }"
+                    "# [doc = concat ! (\" Auto-transpiled enum for \" , stringify ! (Color))] # [derive (Debug , Clone , Copy , PartialEq , Eq)] # [repr (i32)] pub enum Color { Red , Green , Blue , }"
                 );
             }
             item => panic!("expected ItemEnum, got {item:?}"),
@@ -185,7 +186,7 @@ mod tests {
             crate::ast::Item::Enum(e) => {
                 assert_eq!(
                     e.transpile_token_stream(&transpiler)?.to_string(),
-                    "# [doc = concat ! (\" Auto-transpiled enum for \" , stringify ! (Color))] # [repr (u8)] pub enum Color { A = 1 , B = 2 , }"
+                    "# [doc = concat ! (\" Auto-transpiled enum for \" , stringify ! (Color))] # [derive (Debug , Clone , Copy , PartialEq , Eq)] # [repr (u8)] pub enum Color { A = 1 , B = 2 , }"
                 );
             }
             item => panic!("expected ItemEnum, got {item:?}"),
