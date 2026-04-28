@@ -76,6 +76,20 @@ impl<'de> Type<'de> {
             _ => false,
         }
     }
+
+    /// Remove reference qualifiers from the type, if any.
+    pub fn remove_ref(&mut self) {
+        match self {
+            Type::Reference(r) => {
+                *self = *r.referent.clone();
+            }
+            Type::RvalueReference(r) => {
+                *self = *r.referent.clone();
+            }
+            Type::Qualified(q) => q.ty.remove_ref(),
+            _ => {}
+        }
+    }
 }
 
 impl<'de> SourceCodeSpan<'de> for Type<'de> {
