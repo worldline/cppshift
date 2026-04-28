@@ -100,12 +100,12 @@ impl<'de> Transpile for ItemEnum<'de> {
             .into();
 
         // Build #[repr(...)] if an underlying type is specified
-        let repr_attr = match &self.underlying_type {
+        let (ident_ty_attr, repr_attr) = match &self.underlying_type {
             Some(ty) => {
                 let rust_ty = transpiler.ty_mapper.map_type(ty)?;
-                quote::quote! { #[repr(#rust_ty)] }
+                (rust_ty.clone(), quote::quote! { #[repr(#rust_ty)] })
             }
-            None => quote::quote! { #[repr(i32)] },
+            None => (syn::parse_quote!(i32), quote::quote! { #[repr(i32)] }),
         };
 
         // Build variant tokens
@@ -121,12 +121,35 @@ impl<'de> Transpile for ItemEnum<'de> {
             }
         }
 
+        // Collect match arms from the enum variants
+        let variants_match_arms = self.variants.iter().map(|v| {
+            let variant_name = &v.ident;
+            quote::quote! {
+                x if x == #name::#variant_name as #ident_ty_attr => Ok(#name::#variant_name),
+            }
+        });
+
         tokens.extend(quote::quote! {
             #[doc = concat!(" Auto-transpiled enum for ", stringify!(#name))]
             #[derive(Debug, Clone, Copy, PartialEq, Eq)]
             #repr_attr
             pub enum #name { #variant_tokens }
         });
+
+        // Implement try_from
+        let try_from_impl = quote::quote! {
+            impl std::convert::TryFrom<#ident_ty_attr> for #name {
+                type Error = String;
+
+                fn try_from(value: #ident_ty_attr) -> Result<Self, Self::Error> {
+                    match value {
+                        #(#variants_match_arms)*
+                        _ => Err(format!("Invalid value {} for enum {}", value, stringify!(#name))),
+                    }
+                }
+            }
+        };
+        tokens.extend(try_from_impl);
 
         Ok(())
     }
@@ -150,7 +173,7 @@ mod tests {
             crate::ast::Item::Enum(e) => {
                 assert_eq!(
                     e.transpile_token_stream(&transpiler)?.to_string(),
-                    "# [doc = concat ! (\" Auto-transpiled enum for \" , stringify ! (Color))] # [derive (Debug , Clone , Copy , PartialEq , Eq)] # [repr (i32)] pub enum Color { Red , Green , Blue , }"
+                    "# [doc = concat ! (\" Auto-transpiled enum for \" , stringify ! (Color))] # [derive (Debug , Clone , Copy , PartialEq , Eq)] # [repr (i32)] pub enum Color { Red , Green , Blue , } impl std :: convert :: TryFrom < i32 > for Color { type Error = String ; fn try_from (value : i32) -> Result < Self , Self :: Error > { match value { x if x == Color :: Red as i32 => Ok (Color :: Red) , x if x == Color :: Green as i32 => Ok (Color :: Green) , x if x == Color :: Blue as i32 => Ok (Color :: Blue) , _ => Err (format ! (\"Invalid value {} for enum {}\" , value , stringify ! (Color))) , } } }"
                 );
             }
             item => panic!("expected ItemEnum, got {item:?}"),
@@ -168,7 +191,7 @@ mod tests {
             crate::ast::Item::Enum(e) => {
                 assert_eq!(
                     e.transpile_token_stream(&transpiler)?.to_string(),
-                    "# [doc = concat ! (\" Auto-transpiled enum for \" , stringify ! (Color))] # [derive (Debug , Clone , Copy , PartialEq , Eq)] # [repr (i32)] pub enum Color { Red , Green , Blue , }"
+                    "# [doc = concat ! (\" Auto-transpiled enum for \" , stringify ! (Color))] # [derive (Debug , Clone , Copy , PartialEq , Eq)] # [repr (i32)] pub enum Color { Red , Green , Blue , } impl std :: convert :: TryFrom < i32 > for Color { type Error = String ; fn try_from (value : i32) -> Result < Self , Self :: Error > { match value { x if x == Color :: Red as i32 => Ok (Color :: Red) , x if x == Color :: Green as i32 => Ok (Color :: Green) , x if x == Color :: Blue as i32 => Ok (Color :: Blue) , _ => Err (format ! (\"Invalid value {} for enum {}\" , value , stringify ! (Color))) , } } }"
                 );
             }
             item => panic!("expected ItemEnum, got {item:?}"),
@@ -186,7 +209,7 @@ mod tests {
             crate::ast::Item::Enum(e) => {
                 assert_eq!(
                     e.transpile_token_stream(&transpiler)?.to_string(),
-                    "# [doc = concat ! (\" Auto-transpiled enum for \" , stringify ! (Color))] # [derive (Debug , Clone , Copy , PartialEq , Eq)] # [repr (u8)] pub enum Color { A = 1 , B = 2 , }"
+                    "# [doc = concat ! (\" Auto-transpiled enum for \" , stringify ! (Color))] # [derive (Debug , Clone , Copy , PartialEq , Eq)] # [repr (u8)] pub enum Color { A = 1 , B = 2 , } impl std :: convert :: TryFrom < u8 > for Color { type Error = String ; fn try_from (value : u8) -> Result < Self , Self :: Error > { match value { x if x == Color :: A as u8 => Ok (Color :: A) , x if x == Color :: B as u8 => Ok (Color :: B) , _ => Err (format ! (\"Invalid value {} for enum {}\" , value , stringify ! (Color))) , } } }"
                 );
             }
             item => panic!("expected ItemEnum, got {item:?}"),
