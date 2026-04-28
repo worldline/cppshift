@@ -2,6 +2,8 @@
 //!
 //! Analogous to `syn::Stmt`.
 
+use crate::{SourceCodeSpan, SourceSpan};
+
 use super::expr::Expr;
 use super::item::{Ident, Item};
 use super::ty::Type;
@@ -57,6 +59,23 @@ pub enum Stmt<'de> {
     Empty,
 }
 
+impl<'de> SourceCodeSpan<'de> for Stmt<'de> {
+    fn span(&self) -> Option<SourceSpan<'de>> {
+        match self {
+            Stmt::Local(local) => local.span(),
+            Stmt::Expr(stmt_expr) => stmt_expr.expr.span(),
+            Stmt::Return(ret) => ret.expr.as_ref().and_then(|e| e.span()),
+            Stmt::Break(b) => Some(b.span),
+            Stmt::Continue(c) => Some(c.span),
+            Stmt::Goto(g) => Some(g.label.span),
+            Stmt::Label(l) => Some(l.label.span),
+            Stmt::Case(c) => c.value.span(),
+            Stmt::Default(d) => Some(d.span),
+            _ => None,
+        }
+    }
+}
+
 /// A local variable declaration: `int x = 42;`.
 ///
 /// Analogous to `syn::Local`.
@@ -65,6 +84,20 @@ pub struct StmtLocal<'de> {
     pub ty: Type<'de>,
     pub ident: Ident<'de>,
     pub init: Option<Expr<'de>>,
+}
+
+impl<'de> SourceCodeSpan<'de> for StmtLocal<'de> {
+    fn span(&self) -> Option<SourceSpan<'de>> {
+        Some(if let Some(ty_span) = self.ty.span() {
+            if let Some(i) = self.init.as_ref().and_then(|i| i.span()) {
+                ty_span.extend(i)
+            } else {
+                ty_span.extend(self.ident.span)
+            }
+        } else {
+            self.ident.span
+        })
+    }
 }
 
 /// An expression followed by a semicolon.

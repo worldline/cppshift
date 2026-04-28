@@ -1,9 +1,26 @@
 use proc_macro2::TokenStream;
 
 use crate::{
-    ast::stmt::StmtLocal,
+    SourceCodeSpan,
+    ast::{Stmt, stmt::StmtLocal},
     transpile::{Transpile, TranspileError, Transpiler},
 };
+
+/// Build a [`TranspileError::UnsupportedStmt`] from a statement, with the correct span information if available.
+pub fn unsupported_from_stmt(message: &str, stmt: &Stmt<'_>) -> TranspileError {
+    match stmt.span() {
+        Some(span) => TranspileError::UnsupportedStmt {
+            message: message.to_owned(),
+            src: span.full_source().to_owned(),
+            err_span: span.into(),
+        },
+        None => TranspileError::UnsupportedStmt {
+            message: format!("{}: {:?}", message, stmt),
+            src: String::new(),
+            err_span: miette::SourceSpan::new(0.into(), 0),
+        },
+    }
+}
 
 impl<'de> Transpile for StmtLocal<'de> {
     fn transpile(
