@@ -3748,7 +3748,12 @@ fn parse_expr_primary<'de>(p: &mut Parser<'de>) -> Result<Expr<'de>, AstError> {
             let cp = p.checkpoint();
             p.bump()?;
             // Try C-style cast: (type)expr
-            if is_type_start(p.peek_kind()) {
+            if is_type_start(p.peek_kind())
+                || matches!(
+                    p.peek_kind(),
+                    Some(TokenKind::Ident | TokenKind::DoubleColon)
+                )
+            {
                 let _cp2 = p.checkpoint();
                 if let Ok(ty) = parse_type(p)
                     && p.eat(TokenKind::RightParenthese).is_some()
