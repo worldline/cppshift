@@ -16,6 +16,23 @@ pub struct Block<'de> {
     pub stmts: Vec<Stmt<'de>>,
 }
 
+impl<'de> SourceCodeSpan<'de> for Block<'de> {
+    fn span(&self) -> Option<SourceSpan<'de>> {
+        let mut span: Option<SourceSpan<'de>> = None;
+        for stmt in &self.stmts {
+            if let Some(stmt_span) = stmt.span() {
+                span = Some(if let Some(existing_span) = span {
+                    existing_span.extend(stmt_span)
+                } else {
+                    stmt_span
+                });
+            }
+        }
+
+        span
+    }
+}
+
 /// A statement, analogous to `syn::Stmt`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt<'de> {
@@ -71,6 +88,7 @@ impl<'de> SourceCodeSpan<'de> for Stmt<'de> {
             Stmt::Label(l) => Some(l.label.span),
             Stmt::Case(c) => c.value.span(),
             Stmt::Default(d) => Some(d.span),
+            Stmt::Block(b) => b.span(),
             _ => None,
         }
     }
