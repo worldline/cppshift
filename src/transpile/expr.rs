@@ -3,7 +3,8 @@ use quote::ToTokens;
 
 use crate::SourceCodeSpan as _;
 use crate::ast::expr::{
-    BinaryOp, Expr, ExprBinary, ExprBool, ExprNullptr, ExprParen, ExprUnary, UnaryOp,
+    BinaryOp, Expr, ExprBinary, ExprBool, ExprMethodCall, ExprNullptr, ExprParen, ExprUnary,
+    UnaryOp,
 };
 use crate::transpile::{Transpile, Transpiler};
 
@@ -125,6 +126,9 @@ impl<'de> Transpile for Expr<'de> {
                 expr.transpile(transpiler, &mut inner_tokens)?;
                 tokens.extend(quote::quote!((#inner_tokens)));
             }
+            Expr::MethodCall(call) => {
+                call.transpile(transpiler, tokens)?;
+            }
             other => {
                 return if let Some(handler) = &transpiler.fallback_expr_handler {
                     handler(other, transpiler, tokens)
@@ -150,5 +154,84 @@ impl<'de> Transpile for ExprBinary<'de> {
         self.lhs.transpile(transpiler, tokens)?;
         self.op.transpile(transpiler, tokens)?;
         self.rhs.transpile(transpiler, tokens)
+    }
+}
+
+impl<'de> Transpile for ExprMethodCall<'de> {
+    fn transpile(
+        &self,
+        transpiler: &Transpiler,
+        tokens: &mut TokenStream,
+    ) -> Result<(), TranspileError> {
+        self.receiver.transpile(transpiler, tokens)?;
+
+        let method = &self.method;
+        let mut arg_tokens = Vec::new();
+        for arg in self.args.iter() {
+            let mut t = TokenStream::new();
+            arg.transpile(transpiler, &mut t)?;
+            arg_tokens.push(t);
+        }
+
+        tokens.extend(quote::quote!(.#method(#(#arg_tokens),*)));
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::stmt::{Stmt, StmtExpr};
+    use crate::ast::{self, parse_file};
+
+    /// Helper: parse a C++ function body and return the first statement's expression.
+    fn parse_first_expr(src: &str) -> Expr<'_> {
+        let file = parse_file(src).unwrap();
+        match &file.items[0] {
+            ast::Item::Fn(ast::ItemFn {
+                block: Some(block), ..
+            }) => match &block.stmts[0] {
+                Stmt::Expr(StmtExpr { expr }) => expr.clone(),
+                other => panic!("expected Stmt::Expr, got {other:?}"),
+            },
+            item => panic!("expected ItemFn, got {item:?}"),
+        }
+    }
+
+    #[test]
+    fn method_call_no_args_transpiles() -> Result<(), TranspileError> {
+        let transpiler = Transpiler::default();
+        let src = "void f() { obj.method(); }";
+        let expr = parse_first_expr(src);
+        assert_eq!(
+            expr.transpile_token_stream(&transpiler)?.to_string(),
+            "obj . method ()"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn method_call_with_args_transpiles() -> Result<(), TranspileError> {
+        let transpiler = Transpiler::default();
+        let src = "void f() { obj.method(1, 2); }";
+        let expr = parse_first_expr(src);
+        assert_eq!(
+            expr.transpile_token_stream(&transpiler)?.to_string(),
+            "obj . method (1 , 2)"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn arrow_method_call_transpiles() -> Result<(), TranspileError> {
+        let transpiler = Transpiler::default();
+        let src = "void f() { ptr->method(x); }";
+        let expr = parse_first_expr(src);
+        assert_eq!(
+            expr.transpile_token_stream(&transpiler)?.to_string(),
+            "ptr . method (x)"
+        );
+        Ok(())
     }
 }
