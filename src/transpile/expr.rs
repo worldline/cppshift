@@ -3,8 +3,8 @@ use quote::ToTokens;
 
 use crate::SourceCodeSpan as _;
 use crate::ast::expr::{
-    BinaryOp, Expr, ExprBinary, ExprBool, ExprMethodCall, ExprNullptr, ExprParen, ExprUnary,
-    UnaryOp,
+    BinaryOp, Expr, ExprBinary, ExprBool, ExprIndex, ExprMethodCall, ExprNullptr, ExprParen,
+    ExprUnary, UnaryOp,
 };
 use crate::transpile::{Transpile, Transpiler};
 
@@ -126,6 +126,9 @@ impl<'de> Transpile for Expr<'de> {
                 expr.transpile(transpiler, &mut inner_tokens)?;
                 tokens.extend(quote::quote!((#inner_tokens)));
             }
+            Expr::Index(index) => {
+                index.transpile(transpiler, tokens)?;
+            }
             Expr::MethodCall(call) => {
                 call.transpile(transpiler, tokens)?;
             }
@@ -154,6 +157,22 @@ impl<'de> Transpile for ExprBinary<'de> {
         self.lhs.transpile(transpiler, tokens)?;
         self.op.transpile(transpiler, tokens)?;
         self.rhs.transpile(transpiler, tokens)
+    }
+}
+
+impl<'de> Transpile for ExprIndex<'de> {
+    fn transpile(
+        &self,
+        transpiler: &Transpiler,
+        tokens: &mut TokenStream,
+    ) -> Result<(), TranspileError> {
+        self.object.transpile(transpiler, tokens)?;
+
+        let mut index_tokens = TokenStream::new();
+        self.index.transpile(transpiler, &mut index_tokens)?;
+        tokens.extend(quote::quote!([#index_tokens]));
+
+        Ok(())
     }
 }
 
@@ -219,6 +238,18 @@ mod tests {
         assert_eq!(
             expr.transpile_token_stream(&transpiler)?.to_string(),
             "obj . method (1 , 2)"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn index_expr_transpiles() -> Result<(), TranspileError> {
+        let transpiler = Transpiler::default();
+        let src = "void f() { arr[0]; }";
+        let expr = parse_first_expr(src);
+        assert_eq!(
+            expr.transpile_token_stream(&transpiler)?.to_string(),
+            "arr [0]"
         );
         Ok(())
     }
