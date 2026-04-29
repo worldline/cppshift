@@ -110,8 +110,8 @@ impl<'de> Transpile for ItemEnum<'de> {
 
         // Build variant tokens
         let mut variant_tokens = TokenStream::new();
-        if transpiler.enum_default_variant {
-            variant_tokens.extend(quote::quote! { #[default] Default, });
+        if transpiler.enum_default_variant && !self.variants.is_empty() {
+            variant_tokens.extend(quote::quote! { #[default] });
         }
         for variant in self.variants.iter() {
             let v_name: syn::Ident = (&variant.ident).into();
@@ -132,7 +132,7 @@ impl<'de> Transpile for ItemEnum<'de> {
             }
         });
 
-        let derive_attr = if transpiler.enum_default_variant {
+        let derive_attr = if transpiler.enum_default_variant && !self.variants.is_empty() {
             quote::quote! { #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)] }
         } else {
             quote::quote! { #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)] }
@@ -238,7 +238,7 @@ mod tests {
         match &file.items[0] {
             crate::ast::Item::Enum(e) => {
                 let result = e.transpile_token_stream(&transpiler)?.to_string();
-                assert!(result.contains("# [default] Default ,"));
+                assert!(result.contains("# [default]"));
                 assert!(result.contains(
                     "# [derive (Debug , Default , Clone , Copy , PartialEq , Eq , Hash)]"
                 ));
