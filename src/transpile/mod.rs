@@ -31,6 +31,9 @@ pub struct Transpiler {
     /// Type mapper to map C++ types to Rust types
     #[serde(default)]
     pub ty_mapper: TypeMapper,
+    /// Whether to generate a `Default` variant as the first value of transpiled enums
+    #[serde(default)]
+    pub enum_default_variant: bool,
     /// Optional fallback handler for otherwise-unsupported expressions
     #[serde(skip)]
     pub fallback_expr_handler: Option<FallbackExprHandler>,
@@ -41,6 +44,7 @@ impl std::fmt::Debug for Transpiler {
         f.debug_struct("Transpiler")
             .field("skip_types", &self.skip_types)
             .field("ty_mapper", &self.ty_mapper)
+            .field("enum_default_variant", &self.enum_default_variant)
             .field(
                 "fallback_expr_handler",
                 &self.fallback_expr_handler.as_ref().map(|_| "<closure>"),

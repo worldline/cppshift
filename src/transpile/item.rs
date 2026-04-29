@@ -110,6 +110,9 @@ impl<'de> Transpile for ItemEnum<'de> {
 
         // Build variant tokens
         let mut variant_tokens = TokenStream::new();
+        if transpiler.enum_default_variant {
+            variant_tokens.extend(quote::quote! { #[default] Default, });
+        }
         for variant in self.variants.iter() {
             let v_name: syn::Ident = (&variant.ident).into();
             if let Some(ref disc) = variant.discriminant {
@@ -129,9 +132,15 @@ impl<'de> Transpile for ItemEnum<'de> {
             }
         });
 
+        let derive_attr = if transpiler.enum_default_variant {
+            quote::quote! { #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)] }
+        } else {
+            quote::quote! { #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)] }
+        };
+
         tokens.extend(quote::quote! {
             #[doc = concat!(" Auto-transpiled enum for ", stringify!(#name))]
-            #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+            #derive_attr
             #repr_attr
             pub enum #name { #variant_tokens }
         });
@@ -173,7 +182,7 @@ mod tests {
             crate::ast::Item::Enum(e) => {
                 assert_eq!(
                     e.transpile_token_stream(&transpiler)?.to_string(),
-                    "# [doc = concat ! (\" Auto-transpiled enum for \" , stringify ! (Color))] # [derive (Debug , Clone , Copy , PartialEq , Eq)] # [repr (i32)] pub enum Color { Red , Green , Blue , } impl std :: convert :: TryFrom < i32 > for Color { type Error = String ; fn try_from (value : i32) -> Result < Self , Self :: Error > { match value { x if x == Color :: Red as i32 => Ok (Color :: Red) , x if x == Color :: Green as i32 => Ok (Color :: Green) , x if x == Color :: Blue as i32 => Ok (Color :: Blue) , _ => Err (format ! (\"Invalid value {} for enum {}\" , value , stringify ! (Color))) , } } }"
+                    "# [doc = concat ! (\" Auto-transpiled enum for \" , stringify ! (Color))] # [derive (Debug , Clone , Copy , PartialEq , Eq , Hash)] # [repr (i32)] pub enum Color { Red , Green , Blue , } impl std :: convert :: TryFrom < i32 > for Color { type Error = String ; fn try_from (value : i32) -> Result < Self , Self :: Error > { match value { x if x == Color :: Red as i32 => Ok (Color :: Red) , x if x == Color :: Green as i32 => Ok (Color :: Green) , x if x == Color :: Blue as i32 => Ok (Color :: Blue) , _ => Err (format ! (\"Invalid value {} for enum {}\" , value , stringify ! (Color))) , } } }"
                 );
             }
             item => panic!("expected ItemEnum, got {item:?}"),
@@ -191,7 +200,7 @@ mod tests {
             crate::ast::Item::Enum(e) => {
                 assert_eq!(
                     e.transpile_token_stream(&transpiler)?.to_string(),
-                    "# [doc = concat ! (\" Auto-transpiled enum for \" , stringify ! (Color))] # [derive (Debug , Clone , Copy , PartialEq , Eq)] # [repr (i32)] pub enum Color { Red , Green , Blue , } impl std :: convert :: TryFrom < i32 > for Color { type Error = String ; fn try_from (value : i32) -> Result < Self , Self :: Error > { match value { x if x == Color :: Red as i32 => Ok (Color :: Red) , x if x == Color :: Green as i32 => Ok (Color :: Green) , x if x == Color :: Blue as i32 => Ok (Color :: Blue) , _ => Err (format ! (\"Invalid value {} for enum {}\" , value , stringify ! (Color))) , } } }"
+                    "# [doc = concat ! (\" Auto-transpiled enum for \" , stringify ! (Color))] # [derive (Debug , Clone , Copy , PartialEq , Eq , Hash)] # [repr (i32)] pub enum Color { Red , Green , Blue , } impl std :: convert :: TryFrom < i32 > for Color { type Error = String ; fn try_from (value : i32) -> Result < Self , Self :: Error > { match value { x if x == Color :: Red as i32 => Ok (Color :: Red) , x if x == Color :: Green as i32 => Ok (Color :: Green) , x if x == Color :: Blue as i32 => Ok (Color :: Blue) , _ => Err (format ! (\"Invalid value {} for enum {}\" , value , stringify ! (Color))) , } } }"
                 );
             }
             item => panic!("expected ItemEnum, got {item:?}"),
@@ -209,8 +218,30 @@ mod tests {
             crate::ast::Item::Enum(e) => {
                 assert_eq!(
                     e.transpile_token_stream(&transpiler)?.to_string(),
-                    "# [doc = concat ! (\" Auto-transpiled enum for \" , stringify ! (Color))] # [derive (Debug , Clone , Copy , PartialEq , Eq)] # [repr (u8)] pub enum Color { A = 1 , B = 2 , } impl std :: convert :: TryFrom < u8 > for Color { type Error = String ; fn try_from (value : u8) -> Result < Self , Self :: Error > { match value { x if x == Color :: A as u8 => Ok (Color :: A) , x if x == Color :: B as u8 => Ok (Color :: B) , _ => Err (format ! (\"Invalid value {} for enum {}\" , value , stringify ! (Color))) , } } }"
+                    "# [doc = concat ! (\" Auto-transpiled enum for \" , stringify ! (Color))] # [derive (Debug , Clone , Copy , PartialEq , Eq , Hash)] # [repr (u8)] pub enum Color { A = 1 , B = 2 , } impl std :: convert :: TryFrom < u8 > for Color { type Error = String ; fn try_from (value : u8) -> Result < Self , Self :: Error > { match value { x if x == Color :: A as u8 => Ok (Color :: A) , x if x == Color :: B as u8 => Ok (Color :: B) , _ => Err (format ! (\"Invalid value {} for enum {}\" , value , stringify ! (Color))) , } } }"
                 );
+            }
+            item => panic!("expected ItemEnum, got {item:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn enum_with_default_variant_transpiles() -> Result<(), TranspileError> {
+        let transpiler = Transpiler {
+            enum_default_variant: true,
+            ..Default::default()
+        };
+        let src = "enum class Color { Red, Green, Blue };";
+        let file = parse_file(src).unwrap();
+        match &file.items[0] {
+            crate::ast::Item::Enum(e) => {
+                let result = e.transpile_token_stream(&transpiler)?.to_string();
+                assert!(result.contains("# [default] Default ,"));
+                assert!(result.contains(
+                    "# [derive (Debug , Default , Clone , Copy , PartialEq , Eq , Hash)]"
+                ));
             }
             item => panic!("expected ItemEnum, got {item:?}"),
         }
