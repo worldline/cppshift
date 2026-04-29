@@ -1,3 +1,5 @@
+use std::collections::{HashMap, HashSet};
+
 use proc_macro2::TokenStream;
 use quote::ToTokens;
 use syn::parse_str;
@@ -108,12 +110,48 @@ impl<'de> Transpile for ItemEnum<'de> {
             None => (syn::parse_quote!(i32), quote::quote! { #[repr(i32)] }),
         };
 
+        // Pre-pass: compute effective values and deduplicate (keep last variant per value)
+        let mut effective_values: Vec<Option<i128>> = Vec::with_capacity(self.variants.len());
+        let mut auto_value: Option<i128> = Some(0);
+        let mut value_to_last_index: HashMap<i128, usize> = HashMap::new();
+
+        for (i, variant) in self.variants.iter().enumerate() {
+            let val = match &variant.discriminant {
+                Some(disc) => {
+                    let evaluated = disc.const_eval_integer();
+                    auto_value = evaluated.map(|v| v + 1);
+                    evaluated
+                }
+                None => {
+                    let val = auto_value;
+                    auto_value = auto_value.map(|v| v + 1);
+                    val
+                }
+            };
+            if let Some(v) = val {
+                value_to_last_index.insert(v, i);
+            }
+            effective_values.push(val);
+        }
+
+        let keep_indices: HashSet<usize> = (0..self.variants.len())
+            .filter(|&i| match effective_values[i] {
+                Some(val) => value_to_last_index[&val] == i,
+                None => true,
+            })
+            .collect();
+
         // Build variant tokens
         let mut variant_tokens = TokenStream::new();
-        if transpiler.enum_default_variant && !self.variants.is_empty() {
-            variant_tokens.extend(quote::quote! { #[default] });
-        }
-        for variant in self.variants.iter() {
+        let mut is_first_kept = true;
+        for (i, variant) in self.variants.iter().enumerate() {
+            if !keep_indices.contains(&i) {
+                continue;
+            }
+            if is_first_kept && transpiler.enum_default_variant {
+                variant_tokens.extend(quote::quote! { #[default] });
+            }
+            is_first_kept = false;
             let v_name: syn::Ident = (&variant.ident).into();
             if let Some(ref disc) = variant.discriminant {
                 let mut expr_tokens = TokenStream::new();
@@ -124,13 +162,18 @@ impl<'de> Transpile for ItemEnum<'de> {
             }
         }
 
-        // Collect match arms from the enum variants
-        let variants_match_arms = self.variants.iter().map(|v| {
-            let variant_name = &v.ident;
-            quote::quote! {
-                x if x == #name::#variant_name as #ident_ty_attr => Ok(#name::#variant_name),
-            }
-        });
+        // Collect match arms from the kept enum variants
+        let variants_match_arms = self
+            .variants
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| keep_indices.contains(i))
+            .map(|(_, v)| {
+                let variant_name = &v.ident;
+                quote::quote! {
+                    x if x == #name::#variant_name as #ident_ty_attr => Ok(#name::#variant_name),
+                }
+            });
 
         let derive_attr = if transpiler.enum_default_variant && !self.variants.is_empty() {
             quote::quote! { #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)] }
@@ -246,6 +289,43 @@ mod tests {
             item => panic!("expected ItemEnum, got {item:?}"),
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn enum_duplicate_values_keeps_last() -> Result<(), TranspileError> {
+        let transpiler = Transpiler::default();
+        let src = "enum class E { TOTO = 1, TITI = 1 };";
+        let file = parse_file(src).unwrap();
+        match &file.items[0] {
+            crate::ast::Item::Enum(e) => {
+                let result = e.transpile_token_stream(&transpiler)?.to_string();
+                assert!(
+                    !result.contains("TOTO"),
+                    "TOTO should be removed as duplicate"
+                );
+                assert!(result.contains("TITI = 1"), "TITI should be kept");
+            }
+            item => panic!("expected ItemEnum, got {item:?}"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn enum_duplicate_auto_increment_keeps_last() -> Result<(), TranspileError> {
+        let transpiler = Transpiler::default();
+        // A=0, B=1 (auto), C=1 (explicit) → B is duplicate of C, keep C
+        let src = "enum class E { A = 0, B, C = 1 };";
+        let file = parse_file(src).unwrap();
+        match &file.items[0] {
+            crate::ast::Item::Enum(e) => {
+                let result = e.transpile_token_stream(&transpiler)?.to_string();
+                assert!(result.contains("A = 0"), "A should be kept");
+                assert!(!result.contains("B ,"), "B should be removed as duplicate");
+                assert!(result.contains("C = 1"), "C should be kept");
+            }
+            item => panic!("expected ItemEnum, got {item:?}"),
+        }
         Ok(())
     }
 

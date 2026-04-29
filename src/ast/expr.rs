@@ -499,3 +499,45 @@ impl<'de> SourceCodeSpan<'de> for TypeidOperand<'de> {
 pub struct ExprInitList<'de> {
     pub elements: Vec<Expr<'de>>,
 }
+
+impl<'de> Expr<'de> {
+    /// Attempt to evaluate this expression as a compile-time integer constant.
+    ///
+    /// Returns `None` for expressions that cannot be statically evaluated
+    /// (function calls, identifiers, casts, etc.).
+    pub fn const_eval_integer(&self) -> Option<i128> {
+        match self {
+            Expr::Lit(lit) if lit.kind == LitKind::Integer => lit.parse::<i128>().ok(),
+            Expr::Unary(unary) => {
+                let val = unary.operand.const_eval_integer()?;
+                match unary.op {
+                    UnaryOp::Negate => Some(-val),
+                    UnaryOp::Plus => Some(val),
+                    UnaryOp::BitwiseNot => Some(!val),
+                    _ => None,
+                }
+            }
+            Expr::Paren(paren) => paren.expr.const_eval_integer(),
+            Expr::Binary(binary) => {
+                let lhs = binary.lhs.const_eval_integer()?;
+                let rhs = binary.rhs.const_eval_integer()?;
+                match binary.op {
+                    BinaryOp::Add => lhs.checked_add(rhs),
+                    BinaryOp::Sub => lhs.checked_sub(rhs),
+                    BinaryOp::Mul => lhs.checked_mul(rhs),
+                    BinaryOp::Div => lhs.checked_div(rhs),
+                    BinaryOp::Mod => lhs.checked_rem(rhs),
+                    BinaryOp::ShiftLeft => u32::try_from(rhs).ok().and_then(|r| lhs.checked_shl(r)),
+                    BinaryOp::ShiftRight => {
+                        u32::try_from(rhs).ok().and_then(|r| lhs.checked_shr(r))
+                    }
+                    BinaryOp::BitAnd => Some(lhs & rhs),
+                    BinaryOp::BitOr => Some(lhs | rhs),
+                    BinaryOp::BitXor => Some(lhs ^ rhs),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+}
