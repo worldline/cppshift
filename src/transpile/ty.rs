@@ -10,7 +10,7 @@ use crate::ast::ItemTypedef;
 use crate::ast::expr::{Expr, ExprLit, LitKind};
 use crate::ast::item::{ItemConst, ItemStatic, Path};
 use crate::ast::ty::{FundamentalKind, TemplateArg, Type};
-use crate::transpile::{Transpile, Transpiler};
+use crate::transpile::{Transpile, TranspileContext, Transpiler};
 
 use super::error::TranspileError;
 
@@ -284,6 +284,7 @@ impl<'de> Transpile for Type<'de> {
     fn transpile(
         &self,
         transpiler: &Transpiler,
+        _ctx: &mut TranspileContext,
         tokens: &mut TokenStream,
     ) -> Result<(), TranspileError> {
         transpiler.ty_mapper.map_type(self)?.to_tokens(tokens);
@@ -295,6 +296,7 @@ impl<'de> Transpile for ItemTypedef<'de> {
     fn transpile(
         &self,
         transpiler: &Transpiler,
+        _ctx: &mut TranspileContext,
         tokens: &mut TokenStream,
     ) -> Result<(), TranspileError> {
         let name = self.ident;
@@ -347,6 +349,7 @@ fn try_transpile_char_array_from_str_lit<'de>(
     element: &Type<'de>,
     expr: &Expr<'de>,
     transpiler: &Transpiler,
+    ctx: &mut TranspileContext,
     keyword: &str,
     tokens: &mut TokenStream,
 ) -> Option<Result<(), TranspileError>> {
@@ -362,7 +365,7 @@ fn try_transpile_char_array_from_str_lit<'de>(
     };
 
     let mut expr_tokens = TokenStream::new();
-    if let Err(e) = expr.transpile(transpiler, &mut expr_tokens) {
+    if let Err(e) = expr.transpile(transpiler, ctx, &mut expr_tokens) {
         return Some(Err(e));
     }
 
@@ -377,6 +380,7 @@ impl<'de> Transpile for ItemConst<'de> {
     fn transpile(
         &self,
         transpiler: &Transpiler,
+        ctx: &mut TranspileContext,
         tokens: &mut TokenStream,
     ) -> Result<(), TranspileError> {
         let name = self.ident;
@@ -389,6 +393,7 @@ impl<'de> Transpile for ItemConst<'de> {
                 &arr.element,
                 &self.expr,
                 transpiler,
+                ctx,
                 "const",
                 tokens,
             )
@@ -397,7 +402,7 @@ impl<'de> Transpile for ItemConst<'de> {
         }
 
         let mut expr_tokens = TokenStream::new();
-        self.expr.transpile(transpiler, &mut expr_tokens)?;
+        self.expr.transpile(transpiler, ctx, &mut expr_tokens)?;
 
         match &self.expr {
             // C++ string constants with string literal init → `&str`
@@ -441,6 +446,7 @@ impl<'de> Transpile for ItemStatic<'de> {
     fn transpile(
         &self,
         transpiler: &Transpiler,
+        ctx: &mut TranspileContext,
         tokens: &mut TokenStream,
     ) -> Result<(), TranspileError> {
         let name = self.ident;
@@ -461,6 +467,7 @@ impl<'de> Transpile for ItemStatic<'de> {
                 &arr.element,
                 expr,
                 transpiler,
+                ctx,
                 "static",
                 tokens,
             )
@@ -469,7 +476,7 @@ impl<'de> Transpile for ItemStatic<'de> {
         }
 
         let mut expr_tokens = TokenStream::new();
-        expr.transpile(transpiler, &mut expr_tokens)?;
+        expr.transpile(transpiler, ctx, &mut expr_tokens)?;
 
         match expr {
             // C++ string statics with string literal init → `&str`
@@ -577,7 +584,8 @@ mod tests {
             Some(crate::ast::Item::Typedef(t)) => {
                 assert_eq!(
                     "# [doc = concat ! (\" Auto-transpiled type for \" , stringify ! (MyInt16))] pub type MyInt16 = Custom :: int16 ;",
-                    t.transpile_token_stream(&transpiler)?.to_string()
+                    t.transpile_token_stream(&transpiler, &mut TranspileContext::default())?
+                        .to_string()
                 );
             }
             t => panic!("unexpected typedef {t:?}"),
@@ -587,7 +595,8 @@ mod tests {
             Some(crate::ast::Item::Typedef(t)) => {
                 assert_eq!(
                     "# [doc = concat ! (\" Auto-transpiled type for \" , stringify ! (MyString))] pub type MyString = BytesMut ;",
-                    t.transpile_token_stream(&transpiler)?.to_string()
+                    t.transpile_token_stream(&transpiler, &mut TranspileContext::default())?
+                        .to_string()
                 );
             }
             t => panic!("unexpected typedef {t:?}"),
@@ -597,7 +606,8 @@ mod tests {
             Some(crate::ast::Item::Typedef(t)) => {
                 assert_eq!(
                     "# [doc = concat ! (\" Auto-transpiled type for \" , stringify ! (type24))] pub type type24 = & str ;",
-                    t.transpile_token_stream(&transpiler)?.to_string()
+                    t.transpile_token_stream(&transpiler, &mut TranspileContext::default())?
+                        .to_string()
                 );
             }
             t => panic!("unexpected typedef {t:?}"),
@@ -960,7 +970,8 @@ mod tests {
         match &file.items[0] {
             crate::ast::Item::Const(c) => {
                 assert_eq!(
-                    c.transpile_token_stream(&transpiler)?.to_string(),
+                    c.transpile_token_stream(&transpiler, &mut TranspileContext::default())?
+                        .to_string(),
                     "# [doc = concat ! (\" Auto-transpiled const literal \" , stringify ! (i32))] pub const MAX : i32 = 100 ;"
                 );
             }
@@ -984,7 +995,8 @@ mod tests {
         match &file.items[0] {
             crate::ast::Item::Const(c) => {
                 assert_eq!(
-                    c.transpile_token_stream(&transpiler)?.to_string(),
+                    c.transpile_token_stream(&transpiler, &mut TranspileContext::default())?
+                        .to_string(),
                     "# [doc = concat ! (\" Auto-transpiled const literal \" , stringify ! (f64))] pub const PI : f64 = 3.14 ;"
                 );
             }
@@ -1001,7 +1013,8 @@ mod tests {
         match &file.items[0] {
             crate::ast::Item::Const(c) => {
                 assert_eq!(
-                    c.transpile_token_stream(&transpiler)?.to_string(),
+                    c.transpile_token_stream(&transpiler, &mut TranspileContext::default())?
+                        .to_string(),
                     "# [doc = concat ! (\" Auto-transpiled const \" , stringify ! (bool))] pub const FLAG : bool = true ;"
                 );
             }
@@ -1020,7 +1033,8 @@ mod tests {
         match &file.items[0] {
             crate::ast::Item::Const(c) => {
                 assert_eq!(
-                    c.transpile_token_stream(&transpiler)?.to_string(),
+                    c.transpile_token_stream(&transpiler, &mut TranspileContext::default())?
+                        .to_string(),
                     "# [doc = concat ! (\" Auto-transpiled const literal \" , stringify ! (char))] pub const CONST_CHAR_VALUE : char = 'W' ;"
                 );
             }
@@ -1029,7 +1043,8 @@ mod tests {
         match &file.items[1] {
             crate::ast::Item::Const(c) => {
                 assert_eq!(
-                    c.transpile_token_stream(&transpiler)?.to_string(),
+                    c.transpile_token_stream(&transpiler, &mut TranspileContext::default())?
+                        .to_string(),
                     "# [doc = concat ! (\" Auto-transpiled const literal \" , stringify ! (CustomType))] pub const CONST_CUSTOM_VALUE : CustomType = 'W' as CustomType ;"
                 );
             }
@@ -1046,7 +1061,8 @@ mod tests {
         match &file.items[0] {
             crate::ast::Item::Const(c) => {
                 assert_eq!(
-                    c.transpile_token_stream(&transpiler)?.to_string(),
+                    c.transpile_token_stream(&transpiler, &mut TranspileContext::default())?
+                        .to_string(),
                     r#"# [doc = " Auto-transpiled &str const"] pub const WRONG_RETURN_CODE : & str = "404" ;"#
                 );
             }
@@ -1063,7 +1079,8 @@ mod tests {
         match &file.items[0] {
             crate::ast::Item::Static(s) => {
                 assert_eq!(
-                    s.transpile_token_stream(&transpiler)?.to_string(),
+                    s.transpile_token_stream(&transpiler, &mut TranspileContext::default())?
+                        .to_string(),
                     "# [doc = concat ! (\" Auto-transpiled static literal \" , stringify ! (i32))] pub static count : i32 = 0 ;"
                 );
                 assert!(s.class_path.is_none());
@@ -1090,7 +1107,9 @@ mod tests {
         let file = parse_file(src).unwrap();
         match &file.items[0] {
             crate::ast::Item::Const(c) => {
-                let out = c.transpile_token_stream(&transpiler)?.to_string();
+                let out = c
+                    .transpile_token_stream(&transpiler, &mut TranspileContext::default())?
+                    .to_string();
                 assert_eq!(out, r#"pub const listOfChars : & str = "ALPN" ;"#);
             }
             item => panic!("expected ItemConst, got {item:?}"),
@@ -1107,7 +1126,9 @@ mod tests {
         let file = parse_file(src).unwrap();
         match &file.items[0] {
             crate::ast::Item::Const(c) => {
-                let out = c.transpile_token_stream(&transpiler)?.to_string();
+                let out = c
+                    .transpile_token_stream(&transpiler, &mut TranspileContext::default())?
+                    .to_string();
                 assert_eq!(out, r#"pub const nl : & str = "a\nb" ;"#);
             }
             item => panic!("expected ItemConst, got {item:?}"),
@@ -1123,7 +1144,10 @@ mod tests {
         let file = parse_file(src).unwrap();
         match &file.items[0] {
             crate::ast::Item::Static(s) => {
-                assert!(s.transpile_token_stream(&transpiler).is_err());
+                assert!(
+                    s.transpile_token_stream(&transpiler, &mut TranspileContext::default())
+                        .is_err()
+                );
             }
             item => panic!("expected ItemStatic, got {item:?}"),
         }

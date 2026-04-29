@@ -6,7 +6,7 @@ use syn::parse_str;
 
 use crate::{
     ast::{Field, Ident, ItemEnum, Path, Visibility},
-    transpile::{Transpile, TranspileError, Transpiler},
+    transpile::{Transpile, TranspileContext, TranspileError, Transpiler},
 };
 
 impl<'de> From<&Ident<'de>> for syn::Ident {
@@ -72,13 +72,14 @@ impl<'de> Transpile for Field<'de> {
     fn transpile(
         &self,
         transpiler: &Transpiler,
+        ctx: &mut TranspileContext,
         tokens: &mut TokenStream,
     ) -> Result<(), TranspileError> {
         if let Some(ident) = self.ident {
             self.vis.to_tokens(tokens);
             ident.to_tokens(tokens);
             tokens.extend(quote::quote! { : });
-            self.ty.transpile(transpiler, tokens)?;
+            self.ty.transpile(transpiler, ctx, tokens)?;
         }
 
         Ok(())
@@ -89,6 +90,7 @@ impl<'de> Transpile for ItemEnum<'de> {
     fn transpile(
         &self,
         transpiler: &Transpiler,
+        ctx: &mut TranspileContext,
         tokens: &mut TokenStream,
     ) -> Result<(), TranspileError> {
         let name: syn::Ident = self
@@ -155,7 +157,7 @@ impl<'de> Transpile for ItemEnum<'de> {
             let v_name: syn::Ident = (&variant.ident).into();
             if let Some(ref disc) = variant.discriminant {
                 let mut expr_tokens = TokenStream::new();
-                disc.transpile(transpiler, &mut expr_tokens)?;
+                disc.transpile(transpiler, ctx, &mut expr_tokens)?;
                 variant_tokens.extend(quote::quote! { #v_name = #expr_tokens, });
             } else {
                 variant_tokens.extend(quote::quote! { #v_name, });
@@ -224,7 +226,8 @@ mod tests {
         match &file.items[0] {
             crate::ast::Item::Enum(e) => {
                 assert_eq!(
-                    e.transpile_token_stream(&transpiler)?.to_string(),
+                    e.transpile_token_stream(&transpiler, &mut TranspileContext::default())?
+                        .to_string(),
                     "# [doc = concat ! (\" Auto-transpiled enum for \" , stringify ! (Color))] # [derive (Debug , Clone , Copy , PartialEq , Eq , Hash)] # [repr (i32)] pub enum Color { Red , Green , Blue , } impl std :: convert :: TryFrom < i32 > for Color { type Error = String ; fn try_from (value : i32) -> Result < Self , Self :: Error > { match value { x if x == Color :: Red as i32 => Ok (Color :: Red) , x if x == Color :: Green as i32 => Ok (Color :: Green) , x if x == Color :: Blue as i32 => Ok (Color :: Blue) , _ => Err (format ! (\"Invalid value {} for enum {}\" , value , stringify ! (Color))) , } } }"
                 );
             }
@@ -242,7 +245,8 @@ mod tests {
         match &file.items[0] {
             crate::ast::Item::Enum(e) => {
                 assert_eq!(
-                    e.transpile_token_stream(&transpiler)?.to_string(),
+                    e.transpile_token_stream(&transpiler, &mut TranspileContext::default())?
+                        .to_string(),
                     "# [doc = concat ! (\" Auto-transpiled enum for \" , stringify ! (Color))] # [derive (Debug , Clone , Copy , PartialEq , Eq , Hash)] # [repr (i32)] pub enum Color { Red , Green , Blue , } impl std :: convert :: TryFrom < i32 > for Color { type Error = String ; fn try_from (value : i32) -> Result < Self , Self :: Error > { match value { x if x == Color :: Red as i32 => Ok (Color :: Red) , x if x == Color :: Green as i32 => Ok (Color :: Green) , x if x == Color :: Blue as i32 => Ok (Color :: Blue) , _ => Err (format ! (\"Invalid value {} for enum {}\" , value , stringify ! (Color))) , } } }"
                 );
             }
@@ -260,7 +264,8 @@ mod tests {
         match &file.items[0] {
             crate::ast::Item::Enum(e) => {
                 assert_eq!(
-                    e.transpile_token_stream(&transpiler)?.to_string(),
+                    e.transpile_token_stream(&transpiler, &mut TranspileContext::default())?
+                        .to_string(),
                     "# [doc = concat ! (\" Auto-transpiled enum for \" , stringify ! (Color))] # [derive (Debug , Clone , Copy , PartialEq , Eq , Hash)] # [repr (u8)] pub enum Color { A = 1 , B = 2 , } impl std :: convert :: TryFrom < u8 > for Color { type Error = String ; fn try_from (value : u8) -> Result < Self , Self :: Error > { match value { x if x == Color :: A as u8 => Ok (Color :: A) , x if x == Color :: B as u8 => Ok (Color :: B) , _ => Err (format ! (\"Invalid value {} for enum {}\" , value , stringify ! (Color))) , } } }"
                 );
             }
@@ -280,7 +285,9 @@ mod tests {
         let file = parse_file(src).unwrap();
         match &file.items[0] {
             crate::ast::Item::Enum(e) => {
-                let result = e.transpile_token_stream(&transpiler)?.to_string();
+                let result = e
+                    .transpile_token_stream(&transpiler, &mut TranspileContext::default())?
+                    .to_string();
                 assert!(result.contains("# [default]"));
                 assert!(result.contains(
                     "# [derive (Debug , Default , Clone , Copy , PartialEq , Eq , Hash)]"
@@ -299,7 +306,9 @@ mod tests {
         let file = parse_file(src).unwrap();
         match &file.items[0] {
             crate::ast::Item::Enum(e) => {
-                let result = e.transpile_token_stream(&transpiler)?.to_string();
+                let result = e
+                    .transpile_token_stream(&transpiler, &mut TranspileContext::default())?
+                    .to_string();
                 assert!(
                     !result.contains("TOTO"),
                     "TOTO should be removed as duplicate"
@@ -319,7 +328,9 @@ mod tests {
         let file = parse_file(src).unwrap();
         match &file.items[0] {
             crate::ast::Item::Enum(e) => {
-                let result = e.transpile_token_stream(&transpiler)?.to_string();
+                let result = e
+                    .transpile_token_stream(&transpiler, &mut TranspileContext::default())?
+                    .to_string();
                 assert!(result.contains("A = 0"), "A should be kept");
                 assert!(!result.contains("B ,"), "B should be removed as duplicate");
                 assert!(result.contains("C = 1"), "C should be kept");
@@ -343,7 +354,7 @@ mod tests {
                 if let ast::Member::Field(field) = &named_fields.members[1] {
                     assert_eq!(
                         field
-                            .transpile_token_stream(&transpiler)
+                            .transpile_token_stream(&transpiler, &mut TranspileContext::default())
                             .expect("Failed to transpile field[0]")
                             .to_string(),
                         "pub R : i32",
@@ -358,7 +369,7 @@ mod tests {
                 if let ast::Member::Field(field) = &named_fields.members[3] {
                     assert_eq!(
                         field
-                            .transpile_token_stream(&transpiler)
+                            .transpile_token_stream(&transpiler, &mut TranspileContext::default())
                             .expect("Failed to transpile field[3]")
                             .to_string(),
                         "G : u64",
@@ -373,7 +384,7 @@ mod tests {
                 if let ast::Member::Field(field) = &named_fields.members[5] {
                     assert_eq!(
                         field
-                            .transpile_token_stream(&transpiler)
+                            .transpile_token_stream(&transpiler, &mut TranspileContext::default())
                             .expect("Failed to transpile field[5]")
                             .to_string(),
                         "pub (crate) B : i16",

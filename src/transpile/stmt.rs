@@ -3,7 +3,7 @@ use proc_macro2::TokenStream;
 use crate::{
     SourceCodeSpan,
     ast::{Stmt, stmt::StmtLocal},
-    transpile::{Transpile, TranspileError, Transpiler},
+    transpile::{Transpile, TranspileContext, TranspileError, Transpiler},
 };
 
 /// Build a [`TranspileError::UnsupportedStmt`] from a statement, with the correct span information if available.
@@ -26,15 +26,17 @@ impl<'de> Transpile for StmtLocal<'de> {
     fn transpile(
         &self,
         transpiler: &Transpiler,
+        ctx: &mut TranspileContext,
         tokens: &mut TokenStream,
     ) -> Result<(), TranspileError> {
         let ident = self.ident;
+        ctx.declare_local(ident.sym.to_owned());
         tokens.extend(quote::quote! { let mut #ident: });
-        self.ty.transpile(transpiler, tokens)?;
+        self.ty.transpile(transpiler, ctx, tokens)?;
 
         if let Some(init) = &self.init {
             tokens.extend(quote::quote! { = });
-            init.transpile(transpiler, tokens)?;
+            init.transpile(transpiler, ctx, tokens)?;
             tokens.extend(quote::quote! { ; });
         } else {
             tokens.extend(quote::quote! { = Default::default(); });
@@ -64,7 +66,8 @@ mod tests {
             }) => {
                 if let ast::Stmt::Local(stmt) = &block.stmts[0] {
                     assert_eq!(
-                        stmt.transpile_token_stream(&transpiler)?.to_string(),
+                        stmt.transpile_token_stream(&transpiler, &mut TranspileContext::default())?
+                            .to_string(),
                         "let mut x : i32 = 5 ;"
                     );
                 }

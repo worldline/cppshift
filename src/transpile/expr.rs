@@ -6,7 +6,7 @@ use crate::ast::expr::{
     BinaryOp, Expr, ExprBinary, ExprBool, ExprIndex, ExprMethodCall, ExprNullptr, ExprParen,
     ExprUnary, UnaryOp,
 };
-use crate::transpile::{Transpile, Transpiler};
+use crate::transpile::{Transpile, TranspileContext, Transpiler};
 
 use super::error::TranspileError;
 
@@ -14,6 +14,7 @@ impl Transpile for BinaryOp {
     fn transpile(
         &self,
         _transpiler: &Transpiler,
+        _ctx: &mut TranspileContext,
         tokens: &mut TokenStream,
     ) -> Result<(), TranspileError> {
         match self {
@@ -84,6 +85,7 @@ impl<'de> Transpile for Expr<'de> {
     fn transpile(
         &self,
         transpiler: &Transpiler,
+        ctx: &mut TranspileContext,
         tokens: &mut TokenStream,
     ) -> Result<(), TranspileError> {
         match self {
@@ -100,6 +102,9 @@ impl<'de> Transpile for Expr<'de> {
                 tokens.extend(quote::quote!(std::ptr::null()));
             }
             Expr::Ident(i) => {
+                if ctx.needs_self_prefix(i.ident.sym) {
+                    tokens.extend(quote::quote!(self.));
+                }
                 i.ident.to_tokens(tokens);
             }
             Expr::Path(p) => {
@@ -113,28 +118,28 @@ impl<'de> Transpile for Expr<'de> {
                 operand,
             }) => {
                 let mut inner_tokens = TokenStream::new();
-                operand.transpile(transpiler, &mut inner_tokens)?;
+                operand.transpile(transpiler, ctx, &mut inner_tokens)?;
                 tokens.extend(quote::quote!(- #inner_tokens));
             }
             Expr::Binary(ExprBinary { lhs, op, rhs }) => {
-                lhs.transpile(transpiler, tokens)?;
-                op.transpile(transpiler, tokens)?;
-                rhs.transpile(transpiler, tokens)?;
+                lhs.transpile(transpiler, ctx, tokens)?;
+                op.transpile(transpiler, ctx, tokens)?;
+                rhs.transpile(transpiler, ctx, tokens)?;
             }
             Expr::Paren(ExprParen { expr }) => {
                 let mut inner_tokens = TokenStream::new();
-                expr.transpile(transpiler, &mut inner_tokens)?;
+                expr.transpile(transpiler, ctx, &mut inner_tokens)?;
                 tokens.extend(quote::quote!((#inner_tokens)));
             }
             Expr::Index(index) => {
-                index.transpile(transpiler, tokens)?;
+                index.transpile(transpiler, ctx, tokens)?;
             }
             Expr::MethodCall(call) => {
-                call.transpile(transpiler, tokens)?;
+                call.transpile(transpiler, ctx, tokens)?;
             }
             other => {
                 return if let Some(handler) = &transpiler.fallback_expr_handler {
-                    handler(other, transpiler, tokens)
+                    handler(other, transpiler, ctx, tokens)
                 } else {
                     Err(unsupported_from_expr(
                         "expression cannot be transpiled to Rust",
@@ -152,11 +157,12 @@ impl<'de> Transpile for ExprBinary<'de> {
     fn transpile(
         &self,
         transpiler: &Transpiler,
+        ctx: &mut TranspileContext,
         tokens: &mut TokenStream,
     ) -> Result<(), TranspileError> {
-        self.lhs.transpile(transpiler, tokens)?;
-        self.op.transpile(transpiler, tokens)?;
-        self.rhs.transpile(transpiler, tokens)
+        self.lhs.transpile(transpiler, ctx, tokens)?;
+        self.op.transpile(transpiler, ctx, tokens)?;
+        self.rhs.transpile(transpiler, ctx, tokens)
     }
 }
 
@@ -164,12 +170,13 @@ impl<'de> Transpile for ExprIndex<'de> {
     fn transpile(
         &self,
         transpiler: &Transpiler,
+        ctx: &mut TranspileContext,
         tokens: &mut TokenStream,
     ) -> Result<(), TranspileError> {
-        self.object.transpile(transpiler, tokens)?;
+        self.object.transpile(transpiler, ctx, tokens)?;
 
         let mut index_tokens = TokenStream::new();
-        self.index.transpile(transpiler, &mut index_tokens)?;
+        self.index.transpile(transpiler, ctx, &mut index_tokens)?;
         tokens.extend(quote::quote!([#index_tokens]));
 
         Ok(())
@@ -180,15 +187,16 @@ impl<'de> Transpile for ExprMethodCall<'de> {
     fn transpile(
         &self,
         transpiler: &Transpiler,
+        ctx: &mut TranspileContext,
         tokens: &mut TokenStream,
     ) -> Result<(), TranspileError> {
-        self.receiver.transpile(transpiler, tokens)?;
+        self.receiver.transpile(transpiler, ctx, tokens)?;
 
         let method = &self.method;
         let mut arg_tokens = Vec::new();
         for arg in self.args.iter() {
             let mut t = TokenStream::new();
-            arg.transpile(transpiler, &mut t)?;
+            arg.transpile(transpiler, ctx, &mut t)?;
             arg_tokens.push(t);
         }
 
@@ -224,7 +232,8 @@ mod tests {
         let src = "void f() { obj.method(); }";
         let expr = parse_first_expr(src);
         assert_eq!(
-            expr.transpile_token_stream(&transpiler)?.to_string(),
+            expr.transpile_token_stream(&transpiler, &mut TranspileContext::default())?
+                .to_string(),
             "obj . method ()"
         );
         Ok(())
@@ -236,7 +245,8 @@ mod tests {
         let src = "void f() { obj.method(1, 2); }";
         let expr = parse_first_expr(src);
         assert_eq!(
-            expr.transpile_token_stream(&transpiler)?.to_string(),
+            expr.transpile_token_stream(&transpiler, &mut TranspileContext::default())?
+                .to_string(),
             "obj . method (1 , 2)"
         );
         Ok(())
@@ -248,7 +258,8 @@ mod tests {
         let src = "void f() { arr[0]; }";
         let expr = parse_first_expr(src);
         assert_eq!(
-            expr.transpile_token_stream(&transpiler)?.to_string(),
+            expr.transpile_token_stream(&transpiler, &mut TranspileContext::default())?
+                .to_string(),
             "arr [0]"
         );
         Ok(())
@@ -260,8 +271,54 @@ mod tests {
         let src = "void f() { ptr->method(x); }";
         let expr = parse_first_expr(src);
         assert_eq!(
-            expr.transpile_token_stream(&transpiler)?.to_string(),
+            expr.transpile_token_stream(&transpiler, &mut TranspileContext::default())?
+                .to_string(),
             "ptr . method (x)"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn ident_with_member_context_gets_self_prefix() -> Result<(), TranspileError> {
+        let transpiler = Transpiler::default();
+        let src = "void f() { member_var; }";
+        let expr = parse_first_expr(src);
+        let mut ctx = TranspileContext::with_members(["member_var".to_owned()]);
+        assert_eq!(
+            expr.transpile_token_stream(&transpiler, &mut ctx)?
+                .to_string(),
+            "self . member_var"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn ident_without_member_context_stays_plain() -> Result<(), TranspileError> {
+        let transpiler = Transpiler::default();
+        let src = "void f() { local_var; }";
+        let expr = parse_first_expr(src);
+        let mut ctx = TranspileContext::with_members(["member_var".to_owned()]);
+        assert_eq!(
+            expr.transpile_token_stream(&transpiler, &mut ctx)?
+                .to_string(),
+            "local_var"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn ident_local_shadows_member() -> Result<(), TranspileError> {
+        let transpiler = Transpiler::default();
+        let src = "void f() { x; }";
+        let expr = parse_first_expr(src);
+        let mut ctx = TranspileContext::with_members(["x".to_owned()]);
+        ctx.push_scope();
+        ctx.declare_local("x".to_owned());
+        // local shadows member, so no self. prefix
+        assert_eq!(
+            expr.transpile_token_stream(&transpiler, &mut ctx)?
+                .to_string(),
+            "x"
         );
         Ok(())
     }
