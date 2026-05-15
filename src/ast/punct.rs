@@ -71,12 +71,13 @@ impl<'de, T: SourceCodeSpan<'de>> SourceCodeSpan<'de> for Punctuated<'de, T> {
     fn span(&self) -> Option<SourceSpan<'de>> {
         let mut span: Option<SourceSpan<'de>> = None;
         for punctuate in &self.inner {
+            let punctuate_span = punctuate.0.span().or(punctuate.1.map(|t| t.src_span()));
             if let Some(span) = span {
-                if let Some(inner_span) = punctuate.0.span() {
+                if let Some(inner_span) = punctuate_span {
                     span.extend(inner_span);
                 }
             } else {
-                span = punctuate.0.span();
+                span = punctuate_span;
             }
         }
 

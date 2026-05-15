@@ -5,7 +5,7 @@
 use std::str::FromStr;
 
 use crate::ast::ty::{FundamentalKind, Type};
-use crate::{SourceCodeSpan, SourceSpan};
+use crate::{SourceCodeSpan, SourceSpan, source_code_span_impl};
 
 use super::item::{Ident, Path};
 use super::punct::Punctuated;
@@ -197,16 +197,25 @@ impl<'de> SourceCodeSpan<'de> for Expr<'de> {
             | Expr::Nullptr(ExprNullptr { span, .. })
             | Expr::This(ExprThis { span, .. }) => Some(*span),
             Expr::Ident(ExprIdent { ident }) => Some(ident.span),
+            Expr::Path(ExprPath { path }) => path.span(),
             Expr::Paren(expr_paren) => expr_paren.expr.span(),
             Expr::Unary(expr_unary) => expr_unary.span(),
             Expr::Binary(expr_binary) => expr_binary.span(),
             Expr::Conditional(expr_conditional) => expr_conditional.span(),
             Expr::Call(expr_call) => expr_call.span(),
             Expr::MethodCall(expr_method_call) => expr_method_call.span(),
+            Expr::Index(expr_index) => expr_index.span(),
+            Expr::Field(expr_field) => expr_field.span(),
+            Expr::Cast(expr_cast) => expr_cast.span(),
+            Expr::CStyleCast(expr_cstyle_cast) => expr_cstyle_cast.span(),
             Expr::Sizeof(expr_sizeof) => expr_sizeof.operand.span(),
             Expr::Alignof(expr_alignof) => expr_alignof.ty.span(),
+            Expr::New(expr_new) => expr_new.span(),
+            Expr::Delete(expr_delete) => expr_delete.expr.span(),
+            Expr::Throw(expr_throw) => expr_throw.expr.as_ref().and_then(|expr| expr.span()),
+            Expr::Lambda(expr_lambda) => expr_lambda.span(),
             Expr::Typeid(expr_typeid) => expr_typeid.operand.span(),
-            _ => None,
+            Expr::InitList(expr_init_list) => expr_init_list.elements.span(),
         }
     }
 }
@@ -246,6 +255,8 @@ pub struct ExprParen<'de> {
     pub expr: Box<Expr<'de>>,
 }
 
+source_code_span_impl!(ExprParen, expr);
+
 /// Boolean literal.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ExprBool<'de> {
@@ -272,11 +283,7 @@ pub struct ExprUnary<'de> {
     pub operand: Box<Expr<'de>>,
 }
 
-impl<'de> SourceCodeSpan<'de> for ExprUnary<'de> {
-    fn span(&self) -> Option<SourceSpan<'de>> {
-        self.operand.span()
-    }
-}
+source_code_span_impl!(ExprUnary, operand);
 
 /// Binary expression: `lhs op rhs`.
 #[derive(Debug, Clone, PartialEq)]
@@ -286,17 +293,7 @@ pub struct ExprBinary<'de> {
     pub rhs: Box<Expr<'de>>,
 }
 
-impl<'de> SourceCodeSpan<'de> for ExprBinary<'de> {
-    fn span(&self) -> Option<SourceSpan<'de>> {
-        self.lhs.span().map(|l| {
-            if let Some(r) = self.rhs.span() {
-                l.extend(r)
-            } else {
-                l
-            }
-        })
-    }
-}
+source_code_span_impl!(ExprBinary, lhs, rhs);
 
 /// Ternary conditional: `condition ? then_expr : else_expr`.
 #[derive(Debug, Clone, PartialEq)]
@@ -306,19 +303,7 @@ pub struct ExprConditional<'de> {
     pub else_expr: Box<Expr<'de>>,
 }
 
-impl<'de> SourceCodeSpan<'de> for ExprConditional<'de> {
-    fn span(&self) -> Option<SourceSpan<'de>> {
-        self.condition.span().map(|c| {
-            if let Some(e) = self.else_expr.span() {
-                c.extend(e)
-            } else if let Some(t) = self.then_expr.span() {
-                c.extend(t)
-            } else {
-                c
-            }
-        })
-    }
-}
+source_code_span_impl!(ExprConditional, condition, then_expr, else_expr);
 
 /// Function call: `callee(args...)`.
 ///
@@ -329,19 +314,7 @@ pub struct ExprCall<'de> {
     pub args: Punctuated<'de, Expr<'de>>,
 }
 
-impl<'de> SourceCodeSpan<'de> for ExprCall<'de> {
-    fn span(&self) -> Option<SourceSpan<'de>> {
-        if let Some(func_span) = self.func.span() {
-            if let Some(args_span) = self.args.span() {
-                Some(func_span.extend(args_span))
-            } else {
-                Some(func_span)
-            }
-        } else {
-            self.args.span()
-        }
-    }
-}
+source_code_span_impl!(ExprCall, func, args);
 
 /// Method call: `receiver.method(args...)`.
 ///
@@ -354,19 +327,7 @@ pub struct ExprMethodCall<'de> {
     pub args: Punctuated<'de, Expr<'de>>,
 }
 
-impl<'de> SourceCodeSpan<'de> for ExprMethodCall<'de> {
-    fn span(&self) -> Option<SourceSpan<'de>> {
-        if let Some(receiver_span) = self.receiver.span() {
-            if let Some(args_span) = self.args.span() {
-                Some(receiver_span.extend(args_span))
-            } else {
-                Some(receiver_span.extend(self.method.span))
-            }
-        } else {
-            Some(self.method.span)
-        }
-    }
-}
+source_code_span_impl!(ExprMethodCall, receiver, method, args);
 
 /// Array subscript: `object[index]`.
 #[derive(Debug, Clone, PartialEq)]
@@ -374,6 +335,8 @@ pub struct ExprIndex<'de> {
     pub object: Box<Expr<'de>>,
     pub index: Box<Expr<'de>>,
 }
+
+source_code_span_impl!(ExprIndex, object, index);
 
 /// Member access: `object.field` or `ptr->field`.
 ///
@@ -385,6 +348,8 @@ pub struct ExprField<'de> {
     pub member: Ident<'de>,
 }
 
+source_code_span_impl!(ExprField, object, member);
+
 /// C++ named cast: `static_cast<T>(expr)`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExprCast<'de> {
@@ -393,6 +358,8 @@ pub struct ExprCast<'de> {
     pub expr: Box<Expr<'de>>,
 }
 
+source_code_span_impl!(ExprCast, ty, expr);
+
 /// C-style cast: `(type)expr`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExprCStyleCast<'de> {
@@ -400,17 +367,23 @@ pub struct ExprCStyleCast<'de> {
     pub expr: Box<Expr<'de>>,
 }
 
+source_code_span_impl!(ExprCStyleCast, ty, expr);
+
 /// `sizeof` expression.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExprSizeof<'de> {
     pub operand: Box<Expr<'de>>,
 }
 
+source_code_span_impl!(ExprSizeof, operand);
+
 /// `alignof` expression.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExprAlignof<'de> {
     pub ty: Box<super::ty::Type<'de>>,
 }
+
+source_code_span_impl!(ExprAlignof, ty);
 
 /// `new` expression.
 #[derive(Debug, Clone, PartialEq)]
@@ -421,6 +394,8 @@ pub struct ExprNew<'de> {
     pub initializer: Option<NewInitializer<'de>>,
 }
 
+source_code_span_impl!(ExprNew, and_then, placement, ty, and_then, initializer);
+
 /// Initializer for a `new` expression.
 #[derive(Debug, Clone, PartialEq)]
 pub enum NewInitializer<'de> {
@@ -428,6 +403,15 @@ pub enum NewInitializer<'de> {
     Parens(Punctuated<'de, Expr<'de>>),
     /// `new T{args}`
     Braces(Vec<Expr<'de>>),
+}
+
+impl<'de> SourceCodeSpan<'de> for NewInitializer<'de> {
+    fn span(&self) -> Option<SourceSpan<'de>> {
+        match self {
+            NewInitializer::Parens(punctuated) => punctuated.span(),
+            NewInitializer::Braces(exprs) => exprs.span(),
+        }
+    }
 }
 
 /// `delete` expression.
@@ -438,11 +422,15 @@ pub struct ExprDelete<'de> {
     pub expr: Box<Expr<'de>>,
 }
 
+source_code_span_impl!(ExprDelete, expr);
+
 /// `throw` expression.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExprThrow<'de> {
     pub expr: Option<Box<Expr<'de>>>,
 }
+
+source_code_span_impl!(ExprThrow, and_then, expr);
 
 /// Lambda expression.
 #[derive(Debug, Clone, PartialEq)]
@@ -452,6 +440,16 @@ pub struct ExprLambda<'de> {
     pub return_type: Option<Box<super::ty::Type<'de>>>,
     pub body: super::stmt::Block<'de>,
 }
+
+source_code_span_impl!(
+    ExprLambda,
+    captures,
+    and_then,
+    inputs,
+    and_then,
+    return_type,
+    body
+);
 
 /// A lambda capture.
 #[derive(Debug, Clone, PartialEq)]
@@ -472,11 +470,29 @@ pub enum LambdaCapture<'de> {
     Init(Ident<'de>, Box<Expr<'de>>),
 }
 
+impl<'de> SourceCodeSpan<'de> for LambdaCapture<'de> {
+    fn span(&self) -> Option<SourceSpan<'de>> {
+        match &self {
+            LambdaCapture::ByValue(ident) | LambdaCapture::ByRef(ident) => Some(ident.span),
+            LambdaCapture::Init(ident, expr) => {
+                if let Some(expr_span) = expr.span() {
+                    Some(ident.span.extend(expr_span))
+                } else {
+                    Some(ident.span)
+                }
+            }
+            _ => None,
+        }
+    }
+}
+
 /// `typeid` expression.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExprTypeid<'de> {
     pub operand: TypeidOperand<'de>,
 }
+
+source_code_span_impl!(ExprTypeid, operand);
 
 /// Operand of a `typeid` expression.
 #[derive(Debug, Clone, PartialEq)]
@@ -499,6 +515,8 @@ impl<'de> SourceCodeSpan<'de> for TypeidOperand<'de> {
 pub struct ExprInitList<'de> {
     pub elements: Vec<Expr<'de>>,
 }
+
+source_code_span_impl!(ExprInitList, elements);
 
 impl<'de> Expr<'de> {
     /// Attempt to evaluate this expression as a compile-time integer constant.

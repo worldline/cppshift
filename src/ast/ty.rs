@@ -2,7 +2,7 @@
 //!
 //! Analogous to `syn::Type`.
 
-use crate::{SourceCodeSpan, SourceSpan};
+use crate::{SourceCodeSpan, SourceSpan, source_code_span_impl};
 
 use super::expr::Expr;
 use super::item::Path;
@@ -96,16 +96,16 @@ impl<'de> SourceCodeSpan<'de> for Type<'de> {
     fn span(&self) -> Option<SourceSpan<'de>> {
         match self {
             Type::Fundamental(f) => Some(f.span),
-            Type::Path(p) => p.path.segments.first().map(|s| s.ident.span),
+            Type::Path(p) => p.span(),
             Type::Auto(a) => Some(a.span),
-            Type::Decltype(d) => d.expr.span(),
-            Type::Ptr(p) => p.pointee.span(),
-            Type::Reference(r) => r.referent.span(),
-            Type::RvalueReference(r) => r.referent.span(),
-            Type::Array(a) => a.element.span(),
-            Type::FnPtr(f) => f.return_type.span(),
-            Type::Qualified(q) => q.ty.span(),
-            Type::TemplateInst(t) => t.path.segments.first().map(|s| s.ident.span),
+            Type::Decltype(d) => d.span(),
+            Type::Ptr(p) => p.span(),
+            Type::Reference(r) => r.span(),
+            Type::RvalueReference(r) => r.span(),
+            Type::Array(a) => a.span(),
+            Type::FnPtr(f) => f.span(),
+            Type::Qualified(q) => q.span(),
+            Type::TemplateInst(t) => t.span(),
         }
     }
 }
@@ -117,6 +117,8 @@ pub struct TypeFundamental<'de> {
     pub kind: FundamentalKind,
 }
 
+source_code_span_impl!(TypeFundamental, Some, span);
+
 /// A named type via a path: `MyClass`, `std::string`.
 ///
 /// Analogous to `syn::TypePath`.
@@ -124,6 +126,8 @@ pub struct TypeFundamental<'de> {
 pub struct TypePath<'de> {
     pub path: Path<'de>,
 }
+
+source_code_span_impl!(TypePath, path);
 
 /// Pointer type: `T*`.
 ///
@@ -134,6 +138,8 @@ pub struct TypePtr<'de> {
     pub pointee: Box<Type<'de>>,
 }
 
+source_code_span_impl!(TypePtr, pointee);
+
 /// Lvalue reference type: `T&`.
 ///
 /// Analogous to `syn::TypeReference`.
@@ -143,11 +149,15 @@ pub struct TypeReference<'de> {
     pub referent: Box<Type<'de>>,
 }
 
+source_code_span_impl!(TypeReference, referent);
+
 /// Rvalue reference type: `T&&` (C++ specific).
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypeRvalueReference<'de> {
     pub referent: Box<Type<'de>>,
 }
+
+source_code_span_impl!(TypeRvalueReference, referent);
 
 /// Array type: `T[N]`.
 ///
@@ -158,6 +168,8 @@ pub struct TypeArray<'de> {
     pub size: Option<Expr<'de>>,
 }
 
+source_code_span_impl!(TypeArray, and_then, size, element);
+
 /// Function pointer type: `int(*)(int, int)`.
 ///
 /// Analogous to `syn::TypeBareFn`.
@@ -167,17 +179,23 @@ pub struct TypeFnPtr<'de> {
     pub params: Punctuated<'de, Type<'de>>,
 }
 
+source_code_span_impl!(TypeFnPtr, return_type, params);
+
 /// `auto` type.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TypeAuto<'de> {
     pub span: SourceSpan<'de>,
 }
 
+source_code_span_impl!(TypeAuto, Some, span);
+
 /// `decltype(expr)`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypeDecltype<'de> {
     pub expr: Expr<'de>,
 }
+
+source_code_span_impl!(TypeDecltype, expr);
 
 /// Template instantiation type: `vector<int>`, `map<string, int>`.
 #[derive(Debug, Clone, PartialEq)]
@@ -186,11 +204,22 @@ pub struct TypeTemplateInst<'de> {
     pub args: Vec<TemplateArg<'de>>,
 }
 
+source_code_span_impl!(TypeTemplateInst, path, args);
+
 /// A template argument (type or expression).
 #[derive(Debug, Clone, PartialEq)]
 pub enum TemplateArg<'de> {
     Type(Type<'de>),
     Expr(Expr<'de>),
+}
+
+impl<'de> SourceCodeSpan<'de> for TemplateArg<'de> {
+    fn span(&self) -> Option<SourceSpan<'de>> {
+        match &self {
+            TemplateArg::Type(ty) => ty.span(),
+            TemplateArg::Expr(expr) => expr.span(),
+        }
+    }
 }
 
 /// A CV-qualified type: `const T`, `volatile T`, `const volatile T`.
@@ -200,8 +229,12 @@ pub struct TypeQualified<'de> {
     pub ty: Box<Type<'de>>,
 }
 
+source_code_span_impl!(TypeQualified, ty);
+
 /// A template argument for use in paths.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AngleBracketedArgs<'de> {
     pub args: Vec<TemplateArg<'de>>,
 }
+
+source_code_span_impl!(AngleBracketedArgs, args);

@@ -6,7 +6,7 @@ use std::{fmt, iter::Peekable, str::CharIndices};
 use miette::Diagnostic;
 use thiserror::Error;
 
-use crate::SourceSpan;
+use crate::{SourceCodeSpan, SourceSpan};
 
 /// Errors that can occur during lexing
 #[derive(Clone, Diagnostic, Debug, Error)]
@@ -392,6 +392,36 @@ impl<'de> Token<'de> {
     /// Getter of the token src span value
     pub fn src_span(&self) -> SourceSpan<'de> {
         self.src_span
+    }
+}
+
+impl<'de> From<Token<'de>> for SourceSpan<'de> {
+    fn from(token: Token<'de>) -> Self {
+        token.src_span
+    }
+}
+
+impl<'de> From<&Token<'de>> for SourceSpan<'de> {
+    fn from(token: &Token<'de>) -> Self {
+        token.src_span
+    }
+}
+
+impl<'de> SourceCodeSpan<'de> for Token<'de> {
+    fn span(&self) -> Option<SourceSpan<'de>> {
+        Some(self.into())
+    }
+}
+
+impl<'de> From<Token<'de>> for TokenKind {
+    fn from(token: Token<'de>) -> Self {
+        token.kind
+    }
+}
+
+impl<'de> From<&Token<'de>> for TokenKind {
+    fn from(token: &Token<'de>) -> Self {
+        token.kind
     }
 }
 
