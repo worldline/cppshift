@@ -165,7 +165,7 @@ macro_rules! __span_chain {
 /// Public macro: implement SourceCodeSpan for a struct.
 ///
 /// Syntax:
-///   source_code_span_impl!(StructName, [modifier,] member, [modifier,] member, ...)
+///   source_code_span_impl!(StructName, \[modifier,\] member, \[modifier,\] member, ...)
 ///
 /// Each element is an optional modifier (`Some` or `and_then`) followed by a field name.
 /// Elements are combined left-to-right: spans are extended when both are present,
