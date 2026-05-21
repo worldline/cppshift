@@ -1131,6 +1131,7 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
                 pure_virtual: false,
                 defaulted: false,
                 deleted: false,
+                destructor_token: true,
                 member_init_list: Vec::new(),
             },
             block,
@@ -1251,6 +1252,7 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
                         pure_virtual: false,
                         defaulted: false,
                         deleted: false,
+                        destructor_token: false,
                         member_init_list,
                     },
                     block,
@@ -1555,6 +1557,7 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
             pure_virtual,
             defaulted,
             deleted,
+            destructor_token: false,
             member_init_list,
         };
 
@@ -4925,7 +4928,35 @@ mod tests {
         match &file.items[0] {
             Item::Fn(f) => {
                 assert_eq!(f.sig.ident.sym, "bar");
+                assert!(!f.sig.is_class_constructor());
+                assert!(!f.sig.is_class_destructor());
                 assert!(f.block.is_some());
+            }
+            other => panic!("expected Fn, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_qualified_constructor() {
+        let file = parse("Foo::Foo() { }");
+        match &file.items[0] {
+            Item::Fn(f) => {
+                assert_eq!(f.sig.ident.sym, "Foo");
+                assert!(f.sig.is_class_constructor());
+                assert!(!f.sig.is_class_destructor());
+            }
+            other => panic!("expected Fn, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_qualified_destructor() {
+        let file = parse("Foo::~Foo() { }");
+        match &file.items[0] {
+            Item::Fn(f) => {
+                assert_eq!(f.sig.ident.sym, "Foo");
+                assert!(!f.sig.is_class_constructor());
+                assert!(f.sig.is_class_destructor());
             }
             other => panic!("expected Fn, got {other:?}"),
         }

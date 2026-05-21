@@ -328,6 +328,8 @@ pub struct Signature<'de> {
     pub defaulted: bool,
     /// `true` if `= delete` (explicitly deleted function).
     pub deleted: bool,
+    /// `true` if this is a destructor (`~ClassName`).
+    pub destructor_token: bool,
     /// Member initializer list for out-of-line constructors: `: m_x(x), m_y(y)`.
     pub member_init_list: Vec<MemberInit<'de>>,
 }
@@ -345,9 +347,16 @@ source_code_span_impl!(
 impl<'de> Signature<'de> {
     /// Returns true if this is a class constructor.
     pub fn is_class_constructor(&self) -> bool {
-        self.class_path
-            .as_ref()
-            .is_some_and(|cp| self.ident == cp.to_string())
+        !self.destructor_token
+            && self
+                .class_path
+                .as_ref()
+                .is_some_and(|cp| self.ident == cp.to_string())
+    }
+
+    /// Returns true if this is a class destructor.
+    pub fn is_class_destructor(&self) -> bool {
+        self.destructor_token
     }
 
     /// Checks if this function can be called with no arguments
