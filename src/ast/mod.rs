@@ -299,7 +299,7 @@ mod tests {
             }) = stmt1
             {
                 assert_eq!(*op, BinaryOp::ShiftLeft);
-                if let Expr::Path(ExprPath { path }) = rhs.as_ref() {
+                if let Expr::Path(ExprPath { path, args: None }) = rhs.as_ref() {
                     assert_eq!(path.segments[0].ident.sym, "std");
                     assert_eq!(path.segments[1].ident.sym, "endl");
                 } else {
@@ -312,7 +312,7 @@ mod tests {
                 }) = lhs.as_ref()
                 {
                     assert_eq!(*inner_op, BinaryOp::ShiftLeft);
-                    if let Expr::Path(ExprPath { path }) = inner_lhs.as_ref() {
+                    if let Expr::Path(ExprPath { path, args: None }) = inner_lhs.as_ref() {
                         assert_eq!(path.segments[0].ident.sym, "std");
                         assert_eq!(path.segments[1].ident.sym, "cout");
                     } else {
@@ -372,7 +372,7 @@ mod tests {
                 }) = switch_stmts.next().unwrap()
                 {
                     assert_eq!(*op, BinaryOp::ShiftLeft);
-                    if let Expr::Path(ExprPath { path }) = rhs.as_ref() {
+                    if let Expr::Path(ExprPath { path, args: None }) = rhs.as_ref() {
                         assert_eq!(path.segments[1].ident.sym, "endl");
                     } else {
                         panic!("Expected std::endl, got {:#?}", rhs);

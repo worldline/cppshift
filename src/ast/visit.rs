@@ -303,7 +303,17 @@ pub fn visit_expr<'de, V: Visit<'de> + ?Sized>(v: &mut V, expr: &Expr<'de>) {
     match expr {
         Expr::Lit(_) | Expr::Bool(_) | Expr::Nullptr(_) | Expr::This(_) => {}
         Expr::Ident(e) => v.visit_ident(&e.ident),
-        Expr::Path(e) => v.visit_path(&e.path),
+        Expr::Path(e) => {
+            v.visit_path(&e.path);
+            if let Some(args) = &e.args {
+                for arg in args {
+                    match arg {
+                        TemplateArg::Type(ty) => v.visit_type(ty),
+                        TemplateArg::Expr(expr) => v.visit_expr(expr),
+                    }
+                }
+            }
+        }
         Expr::Paren(e) => v.visit_expr(&e.expr),
         Expr::Unary(e) => v.visit_expr(&e.operand),
         Expr::Binary(e) => {

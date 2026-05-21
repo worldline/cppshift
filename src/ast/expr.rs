@@ -4,7 +4,7 @@
 
 use std::str::FromStr;
 
-use crate::ast::ty::{FundamentalKind, Type};
+use crate::ast::ty::{FundamentalKind, TemplateArg, Type};
 use crate::{SourceCodeSpan, SourceSpan, source_code_span_impl};
 
 use super::item::{Ident, Path};
@@ -197,7 +197,7 @@ impl<'de> SourceCodeSpan<'de> for Expr<'de> {
             | Expr::Nullptr(ExprNullptr { span, .. })
             | Expr::This(ExprThis { span, .. }) => Some(*span),
             Expr::Ident(ExprIdent { ident }) => Some(ident.span),
-            Expr::Path(ExprPath { path }) => path.span(),
+            Expr::Path(expr_path) => expr_path.span(),
             Expr::Paren(expr_paren) => expr_paren.expr.span(),
             Expr::Unary(expr_unary) => expr_unary.span(),
             Expr::Binary(expr_binary) => expr_binary.span(),
@@ -244,10 +244,16 @@ pub struct ExprIdent<'de> {
 }
 
 /// Qualified path expression: `std::cout`, `::global::func`.
+///
+/// May include template arguments: `std::shared_ptr<int>`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExprPath<'de> {
     pub path: Path<'de>,
+    /// Template arguments, if any: `<int, double>` in `std::pair<int, double>`.
+    pub args: Option<Vec<TemplateArg<'de>>>,
 }
+
+source_code_span_impl!(ExprPath, path, and_then, args);
 
 /// Parenthesized expression: `(expr)`.
 #[derive(Debug, Clone, PartialEq)]

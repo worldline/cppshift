@@ -3839,7 +3839,7 @@ fn parse_expr_primary<'de>(p: &mut Parser<'de>) -> Result<Expr<'de>, AstError> {
             // Try template arguments: ident<types>(...)
             if p.peek_kind() == Some(TokenKind::LeftChevron) {
                 let cp = p.checkpoint();
-                if let Ok(_args) = parse_angle_bracketed_args(p) {
+                if let Ok(args) = parse_angle_bracketed_args(p) {
                     // If followed by ( or ;, it's a template instantiation
                     if matches!(
                         p.peek_kind(),
@@ -3856,9 +3856,10 @@ fn parse_expr_primary<'de>(p: &mut Parser<'de>) -> Result<Expr<'de>, AstError> {
                                 | TokenKind::LeftBracket
                         )
                     ) {
-                        // Return as a path expression; the template args are stored on the path
-                        // For simplicity, create a typed expression
-                        return Ok(Expr::Path(ExprPath { path }));
+                        return Ok(Expr::Path(ExprPath {
+                            path,
+                            args: Some(args.args),
+                        }));
                     }
                 }
                 p.restore(&cp);
@@ -3868,7 +3869,7 @@ fn parse_expr_primary<'de>(p: &mut Parser<'de>) -> Result<Expr<'de>, AstError> {
                     ident: path.segments[0].ident,
                 }))
             } else {
-                Ok(Expr::Path(ExprPath { path }))
+                Ok(Expr::Path(ExprPath { path, args: None }))
             }
         }
         Some(kind) => Err(AstError::UnexpectedToken {
@@ -4780,6 +4781,35 @@ mod tests {
             Item::Fn(f) => {
                 let param = f.sig.inputs.iter().next().unwrap();
                 assert!(matches!(&param.ty, Type::TemplateInst(_)));
+            }
+            other => panic!("expected Fn, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_expr_template_call() {
+        // std::shared_ptr<int>() should parse the template args
+        let file = parse("void f() { std::shared_ptr<int>(); }");
+        match &file.items[0] {
+            Item::Fn(f) => {
+                let stmt = &f.block.as_ref().unwrap().stmts[0];
+                if let Stmt::Expr(StmtExpr {
+                    expr: Expr::Call(call),
+                }) = stmt
+                {
+                    if let Expr::Path(ExprPath { path, args }) = &*call.func {
+                        assert_eq!(path.segments.len(), 2);
+                        assert_eq!(path.segments[0].ident.sym, "std");
+                        assert_eq!(path.segments[1].ident.sym, "shared_ptr");
+                        let args = args.as_ref().expect("template args should be present");
+                        assert_eq!(args.len(), 1);
+                        assert!(matches!(&args[0], TemplateArg::Type(_)));
+                    } else {
+                        panic!("expected ExprPath with template args, got {:#?}", call.func);
+                    }
+                } else {
+                    panic!("expected call expression, got {stmt:#?}");
+                }
             }
             other => panic!("expected Fn, got {other:?}"),
         }
