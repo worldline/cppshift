@@ -33,6 +33,15 @@ pub enum TranspileError {
         #[label = "{message}"]
         err_span: miette::SourceSpan,
     },
+    /// C++ item cannot be transpiled to Rust
+    #[error("{message}")]
+    UnsupportedItem {
+        message: String,
+        #[source_code]
+        src: String,
+        #[label = "{message}"]
+        err_span: miette::SourceSpan,
+    },
     /// C++ statement cannot be transpiled to Rust
     #[error("{message}")]
     UnsupportedStmt {

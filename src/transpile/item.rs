@@ -5,9 +5,26 @@ use quote::ToTokens;
 use syn::parse_str;
 
 use crate::{
-    ast::{Field, Ident, ItemEnum, Path, Visibility},
+    SourceCodeSpan as _,
+    ast::{Field, Ident, Item, ItemEnum, Path, Visibility},
     transpile::{Transpile, TranspileContext, TranspileError, Transpiler},
 };
+
+/// Build a [`TranspileError::UnsupportedItem`] from an item, with the correct span information if available.
+pub fn unsupported_from_item(message: &str, item: &Item<'_>) -> TranspileError {
+    match item.span() {
+        Some(span) => TranspileError::UnsupportedItem {
+            message: message.to_owned(),
+            src: span.full_source().to_owned(),
+            err_span: span.into(),
+        },
+        None => TranspileError::UnsupportedItem {
+            message: format!("{}: {:?}", message, item),
+            src: String::new(),
+            err_span: miette::SourceSpan::new(0.into(), 0),
+        },
+    }
+}
 
 impl<'de> From<&Ident<'de>> for syn::Ident {
     fn from(ident: &Ident<'de>) -> Self {
