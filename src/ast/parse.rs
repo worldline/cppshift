@@ -2288,20 +2288,51 @@ fn parse_stmt<'de>(p: &mut Parser<'de>) -> Result<Stmt<'de>, AstError> {
     if p.eat(TokenKind::KeywordFor).is_some() {
         p.expect(TokenKind::LeftParenthese)?;
 
-        // Try range-based for: type ident : expr
+        // Try range-based for: type ident : expr  OR  type [id, id] : expr
+        // Use parse_type_no_array to avoid consuming `[` as an array suffix,
+        // which would conflict with structured bindings like `[k, v]`.
         let cp = p.checkpoint();
         if is_type_start(p.peek_kind()) || p.peek_kind() == Some(TokenKind::Ident) {
-            if let Ok(ty) = parse_type(p)
-                && p.peek_kind() == Some(TokenKind::Ident)
-            {
-                let ident = parse_ident(p).unwrap();
-                if p.eat(TokenKind::Colon).is_some() {
+            if let Ok(ty) = parse_type_no_array(p) {
+                // Single identifier binding
+                let binding = if p.peek_kind() == Some(TokenKind::Ident) {
+                    let ident = parse_ident(p).unwrap();
+                    Some(ForRangeBinding::Ident(ident))
+                // Structured binding: [id1, id2, ...]
+                } else if p.peek_kind() == Some(TokenKind::LeftBracket) {
+                    p.eat(TokenKind::LeftBracket);
+                    let mut idents = Vec::new();
+                    loop {
+                        if p.peek_kind() == Some(TokenKind::RightBracket) {
+                            break;
+                        }
+                        if p.peek_kind() == Some(TokenKind::Ident) {
+                            idents.push(parse_ident(p).unwrap());
+                        } else {
+                            break;
+                        }
+                        if p.eat(TokenKind::Comma).is_none() {
+                            break;
+                        }
+                    }
+                    if p.eat(TokenKind::RightBracket).is_some() && !idents.is_empty() {
+                        Some(ForRangeBinding::Structured(idents))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                if let Some(binding) = binding
+                    && p.eat(TokenKind::Colon).is_some()
+                {
                     let range = parse_expr(p)?;
                     p.expect(TokenKind::RightParenthese)?;
                     let body = Box::new(parse_stmt(p)?);
                     return Ok(Stmt::ForRange(StmtForRange {
                         ty,
-                        ident,
+                        binding,
                         range,
                         body,
                     }));
@@ -2728,6 +2759,35 @@ fn parse_type<'de>(p: &mut Parser<'de>) -> Result<Type<'de>, AstError> {
     parse_type_suffix(p, qualified)
 }
 
+/// Like `parse_type` but stops before array brackets, so `[` is not consumed.
+/// Used in range-based for to avoid ambiguity with structured bindings.
+fn parse_type_no_array<'de>(p: &mut Parser<'de>) -> Result<Type<'de>, AstError> {
+    let mut cv = CvQualifiers::default();
+    while let Some(kind) = p.peek_kind() {
+        match kind {
+            TokenKind::KeywordConst => {
+                p.bump()?;
+                cv.const_token = true;
+            }
+            TokenKind::KeywordVolatile => {
+                p.bump()?;
+                cv.volatile_token = true;
+            }
+            _ => break,
+        }
+    }
+    let base = parse_base_type(p)?;
+    let qualified = if cv.const_token || cv.volatile_token {
+        Type::Qualified(TypeQualified {
+            cv,
+            ty: Box::new(base),
+        })
+    } else {
+        base
+    };
+    parse_type_ptr_ref_suffix(p, qualified)
+}
+
 fn parse_base_type<'de>(p: &mut Parser<'de>) -> Result<Type<'de>, AstError> {
     match p.peek_kind() {
         Some(TokenKind::KeywordVoid) => {
@@ -2986,7 +3046,11 @@ fn parse_integer_type<'de>(p: &mut Parser<'de>) -> Result<Type<'de>, AstError> {
     Ok(Type::Fundamental(TypeFundamental { span, kind }))
 }
 
-fn parse_type_suffix<'de>(p: &mut Parser<'de>, mut ty: Type<'de>) -> Result<Type<'de>, AstError> {
+/// Parse pointer and reference suffixes only (no array brackets).
+fn parse_type_ptr_ref_suffix<'de>(
+    p: &mut Parser<'de>,
+    mut ty: Type<'de>,
+) -> Result<Type<'de>, AstError> {
     loop {
         match p.peek_kind() {
             Some(TokenKind::Star) => {
@@ -3023,23 +3087,29 @@ fn parse_type_suffix<'de>(p: &mut Parser<'de>, mut ty: Type<'de>) -> Result<Type
                     referent: Box::new(ty),
                 });
             }
-            // Array type: T[N] or T[]
-            Some(TokenKind::LeftBracket) => {
-                p.bump()?;
-                let size = if p.peek_kind() != Some(TokenKind::RightBracket) {
-                    Some(parse_expr(p)?)
-                } else {
-                    None
-                };
-                p.expect(TokenKind::RightBracket)?;
-                ty = Type::Array(TypeArray {
-                    element: Box::new(ty),
-                    size,
-                });
-            }
             _ => break,
         }
     }
+    Ok(ty)
+}
+
+fn parse_type_suffix<'de>(p: &mut Parser<'de>, ty: Type<'de>) -> Result<Type<'de>, AstError> {
+    let mut ty = parse_type_ptr_ref_suffix(p, ty)?;
+    while let Some(TokenKind::LeftBracket) = p.peek_kind() {
+        // Array type: T[N] or T[]
+        p.bump()?;
+        let size = if p.peek_kind() != Some(TokenKind::RightBracket) {
+            Some(parse_expr(p)?)
+        } else {
+            None
+        };
+        p.expect(TokenKind::RightBracket)?;
+        ty = Type::Array(TypeArray {
+            element: Box::new(ty),
+            size,
+        });
+    }
+
     Ok(ty)
 }
 
@@ -4563,7 +4633,34 @@ mod tests {
         match &file.items[0] {
             Item::Fn(f) => {
                 let block = f.block.as_ref().unwrap();
-                assert!(matches!(&block.stmts[0], Stmt::ForRange(_)));
+                match &block.stmts[0] {
+                    Stmt::ForRange(fr) => {
+                        assert!(matches!(&fr.binding, ForRangeBinding::Ident(_)));
+                    }
+                    other => panic!("expected ForRange, got {other:?}"),
+                }
+            }
+            other => panic!("expected Fn, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_for_range_structured_binding() {
+        let file = parse("void f() { for (const auto& [k, v] : map) { } }");
+        match &file.items[0] {
+            Item::Fn(f) => {
+                let block = f.block.as_ref().unwrap();
+                match &block.stmts[0] {
+                    Stmt::ForRange(fr) => match &fr.binding {
+                        ForRangeBinding::Structured(idents) => {
+                            assert_eq!(idents.len(), 2);
+                            assert_eq!(idents[0].sym, "k");
+                            assert_eq!(idents[1].sym, "v");
+                        }
+                        other => panic!("expected Structured, got {other:?}"),
+                    },
+                    other => panic!("expected ForRange, got {other:?}"),
+                }
             }
             other => panic!("expected Fn, got {other:?}"),
         }

@@ -275,6 +275,14 @@ pub fn visit_stmt<'de, V: Visit<'de> + ?Sized>(v: &mut V, stmt: &Stmt<'de>) {
         }
         Stmt::ForRange(fr) => {
             v.visit_type(&fr.ty);
+            match &fr.binding {
+                ForRangeBinding::Ident(ident) => v.visit_ident(ident),
+                ForRangeBinding::Structured(idents) => {
+                    for ident in idents {
+                        v.visit_ident(ident);
+                    }
+                }
+            }
             v.visit_expr(&fr.range);
             v.visit_stmt(&fr.body);
         }

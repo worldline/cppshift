@@ -191,16 +191,34 @@ source_code_span_impl!(
     StmtFor, and_then, init, and_then, condition, and_then, increment, body
 );
 
+/// Binding in a range-based for loop declaration.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ForRangeBinding<'de> {
+    /// Single identifier: `for (auto x : range)`
+    Ident(Ident<'de>),
+    /// Structured binding: `for (auto [a, b] : range)`
+    Structured(Vec<Ident<'de>>),
+}
+
+impl<'de> SourceCodeSpan<'de> for ForRangeBinding<'de> {
+    fn span(&self) -> Option<SourceSpan<'de>> {
+        match self {
+            ForRangeBinding::Ident(ident) => ident.span(),
+            ForRangeBinding::Structured(idents) => idents.span(),
+        }
+    }
+}
+
 /// `for (decl : range) body`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StmtForRange<'de> {
     pub ty: Type<'de>,
-    pub ident: Ident<'de>,
+    pub binding: ForRangeBinding<'de>,
     pub range: Expr<'de>,
     pub body: Box<Stmt<'de>>,
 }
 
-source_code_span_impl!(StmtForRange, ty, ident, range, body);
+source_code_span_impl!(StmtForRange, ty, binding, range, body);
 
 /// `switch (expr) { body }`.
 #[derive(Debug, Clone, PartialEq)]
