@@ -44,6 +44,8 @@ pub fn parse_file<'de>(content: &'de str) -> Result<File<'de>, AstError> {
 
 #[cfg(test)]
 mod tests {
+    use core::panic;
+
     use crate::ast::expr::{BinaryOp, ExprBinary, ExprIdent, ExprLit, ExprPath, LitKind};
     use crate::ast::stmt::{StmtCase, StmtExpr, StmtReturn, StmtSwitch};
     use crate::ast::ty::{FundamentalKind, TypeArray, TypePtr};
@@ -72,6 +74,12 @@ mod tests {
 
             #define ArgText(x) \
                 x##TEXT
+
+            // class constructor
+            void MyClass::MyClass() : x(2) {}
+
+            // class method
+            void MyClass::myFunction() {}
 
             // main function
             int main(int argc, char* argv[]) {
@@ -136,6 +144,54 @@ mod tests {
             );
         }
 
+        let class_constructor = main_item_iter.next();
+        if let Some(Item::Fn(ItemFn {
+            attrs,
+            vis,
+            sig,
+            block,
+        })) = class_constructor
+        {
+            assert!(attrs.is_empty());
+            assert_eq!(Visibility::Inherited, *vis);
+            assert_eq!(sig.ident.sym, "MyClass");
+            let class_path = sig.class_path.as_ref().expect("expected class qualifier");
+            assert_eq!(class_path.to_string(), "MyClass");
+            assert!(sig.has_no_required_params());
+            assert!(sig.is_class_constructor());
+            assert_eq!(sig.member_init_list.len(), 1);
+            assert_eq!(sig.member_init_list[0].member.to_string(), "x");
+            assert!(block.is_some());
+        } else {
+            panic!(
+                "Wrong item: expected a class function, got {:#?}",
+                class_constructor
+            );
+        }
+
+        let class_method = main_item_iter.next();
+        if let Some(Item::Fn(ItemFn {
+            attrs,
+            vis,
+            sig,
+            block,
+        })) = class_method
+        {
+            assert!(attrs.is_empty());
+            assert_eq!(Visibility::Inherited, *vis);
+            assert_eq!(sig.ident.sym, "myFunction");
+            let class_path = sig.class_path.as_ref().expect("expected class qualifier");
+            assert_eq!(class_path.to_string(), "MyClass");
+            assert!(sig.has_no_required_params());
+            assert!(!sig.is_class_constructor());
+            assert!(block.is_some());
+        } else {
+            panic!(
+                "Wrong item: expected a class function, got {:#?}",
+                class_method
+            );
+        }
+
         let main_function = main_item_iter.next();
         if let Some(Item::Fn(ItemFn {
             attrs,
@@ -148,6 +204,7 @@ mod tests {
             assert_eq!(Visibility::Inherited, *vis);
 
             // Check signature
+            assert!(sig.class_path.is_none());
             assert!(!sig.constexpr_token);
             assert!(!sig.consteval_token);
             assert!(!sig.inline_token);
@@ -242,7 +299,7 @@ mod tests {
             }) = stmt1
             {
                 assert_eq!(*op, BinaryOp::ShiftLeft);
-                if let Expr::Path(ExprPath { path }) = rhs.as_ref() {
+                if let Expr::Path(ExprPath { path, args: None }) = rhs.as_ref() {
                     assert_eq!(path.segments[0].ident.sym, "std");
                     assert_eq!(path.segments[1].ident.sym, "endl");
                 } else {
@@ -255,7 +312,7 @@ mod tests {
                 }) = lhs.as_ref()
                 {
                     assert_eq!(*inner_op, BinaryOp::ShiftLeft);
-                    if let Expr::Path(ExprPath { path }) = inner_lhs.as_ref() {
+                    if let Expr::Path(ExprPath { path, args: None }) = inner_lhs.as_ref() {
                         assert_eq!(path.segments[0].ident.sym, "std");
                         assert_eq!(path.segments[1].ident.sym, "cout");
                     } else {
@@ -287,22 +344,24 @@ mod tests {
 
                 // case 1:
                 if let Stmt::Case(StmtCase {
-                    value: Expr::Lit(ExprLit { span, kind }),
+                    value: Expr::Lit(expr_lit),
                 }) = switch_stmts.next().unwrap()
                 {
-                    assert_eq!(*kind, LitKind::Integer);
-                    assert_eq!(span.src(), "1");
+                    assert_eq!(expr_lit.kind, LitKind::Integer);
+                    assert_eq!(expr_lit.span.src(), "1");
+                    assert_eq!(expr_lit.parse::<i32>(), Ok(1));
                 } else {
                     panic!("Expected case 1");
                 }
 
                 // case 2:
                 if let Stmt::Case(StmtCase {
-                    value: Expr::Lit(ExprLit { span, kind }),
+                    value: Expr::Lit(expr_lit),
                 }) = switch_stmts.next().unwrap()
                 {
-                    assert_eq!(*kind, LitKind::Integer);
-                    assert_eq!(span.src(), "2");
+                    assert_eq!(expr_lit.kind, LitKind::Integer);
+                    assert_eq!(expr_lit.span.src(), "2");
+                    assert_eq!(expr_lit.parse::<u16>(), Ok(2));
                 } else {
                     panic!("Expected case 2");
                 }
@@ -313,7 +372,7 @@ mod tests {
                 }) = switch_stmts.next().unwrap()
                 {
                     assert_eq!(*op, BinaryOp::ShiftLeft);
-                    if let Expr::Path(ExprPath { path }) = rhs.as_ref() {
+                    if let Expr::Path(ExprPath { path, args: None }) = rhs.as_ref() {
                         assert_eq!(path.segments[1].ident.sym, "endl");
                     } else {
                         panic!("Expected std::endl, got {:#?}", rhs);
@@ -390,5 +449,212 @@ mod tests {
         }
 
         assert_eq!(None, main_item_iter.next());
+    }
+
+    /// Test the ast parser with a simple class definition that includes a constructor, a member function, and a member variable
+    #[test]
+    fn class_header_ast() {
+        let class_header_src = r#"
+            #include <iostream>
+
+            /**
+             * This is a simple class definition for testing the AST parser.
+             * It includes a constructor, a member function, and a member variable.
+             */
+            class MyClass: public MyMotherClass
+            {
+                MACRO_DEF(param1, 1);
+                typedef MyMotherClass BaseClass;
+
+                public:
+                static const string STATIC_VALUE;
+
+                public:
+                enum ClassEnum
+                {
+                    FIRST  = 0,
+                    SECOND = 1,
+                };
+
+                private: int member_var;
+                public: MyClass(int x) : member_var(x) {}
+                public: void member_function();
+            };
+        "#;
+
+        let class_header_file = parse_file(class_header_src).unwrap();
+        assert!(!class_header_file.items.is_empty());
+        let mut class_header_item_iter = class_header_file.items.iter();
+
+        let include_system_iostream = class_header_item_iter.next();
+        if let Some(Item::Include(ItemInclude { span, path })) = include_system_iostream {
+            assert_eq!(span.src(), "#include <iostream>");
+            if let IncludePath::System(path_span) = path {
+                assert_eq!(path_span.src(), "iostream");
+            } else {
+                panic!("Expected a system include path, got {:#?}", path);
+            }
+        } else {
+            panic!(
+                "Wrong item: expected an include directive, got {:#?}",
+                include_system_iostream
+            );
+        }
+
+        let class_header = class_header_item_iter.next();
+        if let Some(Item::Class(ItemClass {
+            attrs,
+            ident,
+            generics,
+            bases,
+            fields: Fields::Named(fields_named),
+        })) = class_header
+        {
+            assert_eq!(attrs.len(), 0);
+            assert_eq!(Some("MyClass"), ident.as_ref().map(|id| id.sym));
+            assert_eq!(&None, generics);
+
+            if bases.len() == 1
+                && let Some(base) = bases.first()
+            {
+                assert_eq!(base.access, Visibility::Public);
+                assert!(!base.virtual_token);
+                assert_eq!(base.path.to_string(), "MyMotherClass");
+            } else {
+                panic!(
+                    "Wrong class.bases: expected an inheritance, got {:#?}",
+                    bases
+                );
+            }
+
+            let mut fields_named_iter = fields_named.members.iter();
+
+            // 1. MACRO_DEF(param1, 1); → Verbatim
+            let verbatim_item = fields_named_iter.next();
+            if let Some(Member::Item(item)) = verbatim_item
+                && let Item::Verbatim(verbatim) = item.as_ref()
+            {
+                assert!(!verbatim.tokens.is_empty());
+            } else {
+                panic!("Expected a macro verbatim, got {:#?}", verbatim_item);
+            }
+
+            // 2. typedef MyMotherClass BaseClass; → Typedef
+            let typedef_item = fields_named_iter.next();
+            if let Some(Member::Item(item)) = typedef_item
+                && let Item::Typedef(td) = item.as_ref()
+            {
+                assert_eq!(td.ident.sym, "BaseClass");
+            } else {
+                panic!("Expected a typedef, got {:#?}", typedef_item);
+            }
+
+            // 3. public: → AccessSpecifier
+            let access_public_static = fields_named_iter.next();
+            assert_eq!(
+                Some(&Member::AccessSpecifier(Visibility::Public)),
+                access_public_static,
+            );
+
+            // 4. static const string STATIC_VALUE; → Field
+            let static_field = fields_named_iter.next();
+            if let Some(Member::Field(field)) = static_field {
+                assert_eq!(Some("STATIC_VALUE"), field.ident.as_ref().map(|id| id.sym));
+                assert!(field.static_token);
+                assert_eq!(field.default_value, None);
+            } else {
+                panic!("Expected a static field, got {:#?}", static_field);
+            }
+
+            // 5. public: → AccessSpecifier
+            let access_public_enum = fields_named_iter.next();
+            assert_eq!(
+                Some(&Member::AccessSpecifier(Visibility::Public)),
+                access_public_enum,
+            );
+
+            // 6. enum ClassEnum { FIRST = 0, SECOND = 1, }; → Enum
+            let enum_item = fields_named_iter.next();
+            if let Some(Member::Item(item)) = enum_item
+                && let Item::Enum(e) = item.as_ref()
+            {
+                assert_eq!(Some("ClassEnum"), e.ident.as_ref().map(|id| id.sym));
+                assert!(!e.scoped);
+                assert_eq!(e.underlying_type, None);
+                assert_eq!(e.variants.len(), 2);
+                let mut variants_iter = e.variants.iter();
+                assert_eq!(variants_iter.next().unwrap().ident.sym, "FIRST");
+                assert_eq!(variants_iter.next().unwrap().ident.sym, "SECOND");
+            } else {
+                panic!("Expected an enum, got {:#?}", enum_item);
+            }
+
+            // 7. private: → AccessSpecifier
+            let access_private = fields_named_iter.next();
+            assert_eq!(
+                Some(&Member::AccessSpecifier(Visibility::Private)),
+                access_private,
+            );
+
+            // 8. int member_var; → Field
+            let field_member_var = fields_named_iter.next();
+            if let Some(Member::Field(field)) = field_member_var {
+                assert_eq!(Some("member_var"), field.ident.as_ref().map(|id| id.sym));
+                assert!(!field.static_token);
+                assert_eq!(field.default_value, None);
+            } else {
+                panic!("Expected a field, got {:#?}", field_member_var);
+            }
+
+            // 9. public: → AccessSpecifier
+            let access_public1 = fields_named_iter.next();
+            assert_eq!(
+                Some(&Member::AccessSpecifier(Visibility::Public)),
+                access_public1,
+            );
+
+            // 10. MyClass(int x) : member_var(x) {} → Constructor
+            let constructor = fields_named_iter.next();
+            if let Some(Member::Constructor(ctor)) = constructor {
+                assert_eq!(ctor.ident.sym, "MyClass");
+                assert!(!ctor.explicit_token);
+                assert!(!ctor.constexpr_token);
+                assert!(!ctor.noexcept_token);
+                assert!(!ctor.defaulted);
+                assert!(!ctor.deleted);
+                assert_eq!(ctor.inputs.len(), 1);
+                assert_eq!(ctor.member_init_list.len(), 1);
+                assert_eq!(ctor.member_init_list[0].member.to_string(), "member_var");
+                assert!(ctor.block.is_some());
+            } else {
+                panic!("Expected a constructor, got {:#?}", constructor);
+            }
+
+            // 11. public: → AccessSpecifier
+            let access_public2 = fields_named_iter.next();
+            assert_eq!(
+                Some(&Member::AccessSpecifier(Visibility::Public)),
+                access_public2,
+            );
+
+            // 12. void member_function(); → Method
+            let method = fields_named_iter.next();
+            if let Some(Member::Method(m)) = method {
+                assert_eq!(m.sig.ident.sym, "member_function");
+                assert!(m.block.is_none());
+            } else {
+                panic!("Expected a method, got {:#?}", method);
+            }
+
+            // No more members
+            assert_eq!(None, fields_named_iter.next());
+        } else {
+            panic!(
+                "Wrong item: expected a class definition, got {:#?}",
+                class_header
+            );
+        }
+
+        assert_eq!(None, class_header_item_iter.next());
     }
 }

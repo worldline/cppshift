@@ -106,6 +106,12 @@ pub fn visit_item<'de, V: Visit<'de> + ?Sized>(v: &mut V, item: &Item<'de>) {
                 v.visit_expr(expr);
             }
         }
+        Item::Var(i) => {
+            v.visit_type(&i.ty);
+            if let Some(expr) = &i.expr {
+                v.visit_expr(expr);
+            }
+        }
         Item::ForeignMod(i) => {
             for fi in &i.items {
                 match fi {
@@ -200,11 +206,20 @@ pub fn visit_member<'de, V: Visit<'de> + ?Sized>(v: &mut V, member: &Member<'de>
 
 pub fn visit_signature<'de, V: Visit<'de> + ?Sized>(v: &mut V, sig: &Signature<'de>) {
     v.visit_type(&sig.return_type);
+    if let Some(class_path) = &sig.class_path {
+        v.visit_path(class_path);
+    }
     v.visit_ident(&sig.ident);
     for arg in sig.inputs.iter() {
         v.visit_type(&arg.ty);
         if let Some(ident) = &arg.ident {
             v.visit_ident(ident);
+        }
+    }
+    for init in &sig.member_init_list {
+        v.visit_path(&init.member);
+        for expr in init.args.iter() {
+            v.visit_expr(expr);
         }
     }
 }
@@ -260,6 +275,14 @@ pub fn visit_stmt<'de, V: Visit<'de> + ?Sized>(v: &mut V, stmt: &Stmt<'de>) {
         }
         Stmt::ForRange(fr) => {
             v.visit_type(&fr.ty);
+            match &fr.binding {
+                ForRangeBinding::Ident(ident) => v.visit_ident(ident),
+                ForRangeBinding::Structured(idents) => {
+                    for ident in idents {
+                        v.visit_ident(ident);
+                    }
+                }
+            }
             v.visit_expr(&fr.range);
             v.visit_stmt(&fr.body);
         }
@@ -288,7 +311,17 @@ pub fn visit_expr<'de, V: Visit<'de> + ?Sized>(v: &mut V, expr: &Expr<'de>) {
     match expr {
         Expr::Lit(_) | Expr::Bool(_) | Expr::Nullptr(_) | Expr::This(_) => {}
         Expr::Ident(e) => v.visit_ident(&e.ident),
-        Expr::Path(e) => v.visit_path(&e.path),
+        Expr::Path(e) => {
+            v.visit_path(&e.path);
+            if let Some(args) = &e.args {
+                for arg in args {
+                    match arg {
+                        TemplateArg::Type(ty) => v.visit_type(ty),
+                        TemplateArg::Expr(expr) => v.visit_expr(expr),
+                    }
+                }
+            }
+        }
         Expr::Paren(e) => v.visit_expr(&e.expr),
         Expr::Unary(e) => v.visit_expr(&e.operand),
         Expr::Binary(e) => {

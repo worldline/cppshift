@@ -2,14 +2,14 @@
 //!
 //! Analogous to `syn::Type`.
 
-use crate::SourceSpan;
+use crate::{SourceCodeSpan, SourceSpan, source_code_span_impl};
 
 use super::expr::Expr;
 use super::item::Path;
 use super::punct::Punctuated;
 
 /// The kind of a fundamental (built-in) type.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FundamentalKind {
     Void,
     Bool,
@@ -67,12 +67,57 @@ pub enum Type<'de> {
     Qualified(TypeQualified<'de>),
 }
 
+impl<'de> Type<'de> {
+    /// Check if the type is `auto`.
+    pub fn is_auto(&self) -> bool {
+        match self {
+            Type::Auto(_) => true,
+            Type::Qualified(q) => q.ty.is_auto(),
+            _ => false,
+        }
+    }
+
+    /// Remove reference qualifiers from the type, if any.
+    pub fn remove_ref(&mut self) {
+        match self {
+            Type::Reference(r) => {
+                *self = *r.referent.clone();
+            }
+            Type::RvalueReference(r) => {
+                *self = *r.referent.clone();
+            }
+            Type::Qualified(q) => q.ty.remove_ref(),
+            _ => {}
+        }
+    }
+}
+
+impl<'de> SourceCodeSpan<'de> for Type<'de> {
+    fn span(&self) -> Option<SourceSpan<'de>> {
+        match self {
+            Type::Fundamental(f) => Some(f.span),
+            Type::Path(p) => p.span(),
+            Type::Auto(a) => Some(a.span),
+            Type::Decltype(d) => d.span(),
+            Type::Ptr(p) => p.span(),
+            Type::Reference(r) => r.span(),
+            Type::RvalueReference(r) => r.span(),
+            Type::Array(a) => a.span(),
+            Type::FnPtr(f) => f.span(),
+            Type::Qualified(q) => q.span(),
+            Type::TemplateInst(t) => t.span(),
+        }
+    }
+}
+
 /// A fundamental (built-in) type.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TypeFundamental<'de> {
     pub span: SourceSpan<'de>,
     pub kind: FundamentalKind,
 }
+
+source_code_span_impl!(TypeFundamental, Some, span);
 
 /// A named type via a path: `MyClass`, `std::string`.
 ///
@@ -81,6 +126,8 @@ pub struct TypeFundamental<'de> {
 pub struct TypePath<'de> {
     pub path: Path<'de>,
 }
+
+source_code_span_impl!(TypePath, path);
 
 /// Pointer type: `T*`.
 ///
@@ -91,6 +138,8 @@ pub struct TypePtr<'de> {
     pub pointee: Box<Type<'de>>,
 }
 
+source_code_span_impl!(TypePtr, pointee);
+
 /// Lvalue reference type: `T&`.
 ///
 /// Analogous to `syn::TypeReference`.
@@ -100,11 +149,15 @@ pub struct TypeReference<'de> {
     pub referent: Box<Type<'de>>,
 }
 
+source_code_span_impl!(TypeReference, referent);
+
 /// Rvalue reference type: `T&&` (C++ specific).
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypeRvalueReference<'de> {
     pub referent: Box<Type<'de>>,
 }
+
+source_code_span_impl!(TypeRvalueReference, referent);
 
 /// Array type: `T[N]`.
 ///
@@ -115,6 +168,8 @@ pub struct TypeArray<'de> {
     pub size: Option<Expr<'de>>,
 }
 
+source_code_span_impl!(TypeArray, and_then, size, element);
+
 /// Function pointer type: `int(*)(int, int)`.
 ///
 /// Analogous to `syn::TypeBareFn`.
@@ -124,17 +179,23 @@ pub struct TypeFnPtr<'de> {
     pub params: Punctuated<'de, Type<'de>>,
 }
 
+source_code_span_impl!(TypeFnPtr, return_type, params);
+
 /// `auto` type.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TypeAuto<'de> {
     pub span: SourceSpan<'de>,
 }
 
+source_code_span_impl!(TypeAuto, Some, span);
+
 /// `decltype(expr)`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypeDecltype<'de> {
     pub expr: Expr<'de>,
 }
+
+source_code_span_impl!(TypeDecltype, expr);
 
 /// Template instantiation type: `vector<int>`, `map<string, int>`.
 #[derive(Debug, Clone, PartialEq)]
@@ -143,11 +204,22 @@ pub struct TypeTemplateInst<'de> {
     pub args: Vec<TemplateArg<'de>>,
 }
 
+source_code_span_impl!(TypeTemplateInst, path, args);
+
 /// A template argument (type or expression).
 #[derive(Debug, Clone, PartialEq)]
 pub enum TemplateArg<'de> {
     Type(Type<'de>),
     Expr(Expr<'de>),
+}
+
+impl<'de> SourceCodeSpan<'de> for TemplateArg<'de> {
+    fn span(&self) -> Option<SourceSpan<'de>> {
+        match &self {
+            TemplateArg::Type(ty) => ty.span(),
+            TemplateArg::Expr(expr) => expr.span(),
+        }
+    }
 }
 
 /// A CV-qualified type: `const T`, `volatile T`, `const volatile T`.
@@ -157,8 +229,12 @@ pub struct TypeQualified<'de> {
     pub ty: Box<Type<'de>>,
 }
 
+source_code_span_impl!(TypeQualified, ty);
+
 /// A template argument for use in paths.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AngleBracketedArgs<'de> {
     pub args: Vec<TemplateArg<'de>>,
 }
+
+source_code_span_impl!(AngleBracketedArgs, args);

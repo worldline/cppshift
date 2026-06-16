@@ -2,6 +2,8 @@
 //!
 //! Not part of the public API. Used exclusively by [`super::parse_file`].
 
+use std::collections::LinkedList;
+
 use crate::SourceSpan;
 use crate::lex::{Lexer, Token, TokenKind};
 
@@ -22,6 +24,10 @@ pub(super) struct Parser<'de> {
     lexer: Lexer<'de>,
     /// The most recently consumed token (for span tracking)
     last_token: Option<Token<'de>>,
+    /// When we split a `>>` (ShiftRight) inside nested template args, the second
+    /// `>` is logically still pending. This holds the token so that peek/bump
+    /// can return it before advancing the underlying lexer.
+    pending_right_chevron: Option<Token<'de>>,
 }
 
 /// Advance a lexer clone, skipping comments, returning the next token.
@@ -41,10 +47,14 @@ impl<'de> Parser<'de> {
             src,
             lexer: Lexer::new(src),
             last_token: None,
+            pending_right_chevron: None,
         })
     }
 
     fn peek(&self) -> Option<Token<'de>> {
+        if let Some(tok) = self.pending_right_chevron {
+            return Some(tok);
+        }
         let mut clone = self.lexer.clone();
         next_non_comment(&mut clone)
     }
@@ -55,7 +65,16 @@ impl<'de> Parser<'de> {
 
     fn peek_nth(&self, n: usize) -> Option<Token<'de>> {
         let mut clone = self.lexer.clone();
-        for _ in 0..n {
+        if self.pending_right_chevron.is_some() && n == 0 {
+            return self.pending_right_chevron;
+        }
+
+        let start = if self.pending_right_chevron.is_some() {
+            1
+        } else {
+            0
+        };
+        for _ in start..n {
             next_non_comment(&mut clone)?;
         }
         next_non_comment(&mut clone)
@@ -66,6 +85,10 @@ impl<'de> Parser<'de> {
     }
 
     fn bump(&mut self) -> Result<Token<'de>, AstError> {
+        if let Some(tok) = self.pending_right_chevron.take() {
+            self.last_token = Some(tok);
+            return Ok(tok);
+        }
         loop {
             match self.lexer.next() {
                 Some(Ok(tok)) if tok.kind() == TokenKind::Comment => continue,
@@ -105,13 +128,14 @@ impl<'de> Parser<'de> {
     }
 
     /// Clone the lexer for backtracking.
-    fn checkpoint(&self) -> Lexer<'de> {
-        self.lexer.clone()
+    fn checkpoint(&self) -> (Lexer<'de>, Option<Token<'de>>) {
+        (self.lexer.clone(), self.pending_right_chevron)
     }
 
     /// Restore the lexer from a previously saved clone.
-    fn restore(&mut self, saved: &Lexer<'de>) {
-        self.lexer = saved.clone();
+    fn restore(&mut self, saved: &(Lexer<'de>, Option<Token<'de>>)) {
+        self.lexer = saved.0.clone();
+        self.pending_right_chevron = saved.1;
     }
 
     /// Compute a span from `start` (captured via `peek()` before parsing)
@@ -247,7 +271,7 @@ fn parse_item<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError> {
     // Empty declaration (stray semicolons, e.g., after namespace or class body)
     if p.peek_kind() == Some(TokenKind::Semicolon) {
         p.bump()?;
-        return Ok(Item::Verbatim(ItemVerbatim { tokens: Vec::new() }));
+        return Ok(Item::Verbatim(ItemVerbatim::default()));
     }
 
     // Parse leading attributes [[...]]
@@ -296,7 +320,7 @@ fn parse_item<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError> {
                 }
             }
             p.expect(TokenKind::Semicolon)?;
-            Some(Item::Verbatim(ItemVerbatim { tokens: Vec::new() }))
+            Some(Item::Verbatim(ItemVerbatim::default()))
         }
         _ => None,
     };
@@ -335,6 +359,7 @@ fn set_item_attrs<'de>(mut item: Item<'de>, attrs: Vec<Attribute<'de>>) -> Item<
         Item::Typedef(t) => t.attrs = attrs,
         Item::Const(c) => c.attrs = attrs,
         Item::Static(s) => s.attrs = attrs,
+        Item::Var(v) => v.attrs = attrs,
         Item::ForeignMod(f) => f.attrs = attrs,
         Item::Template(t) => t.attrs = attrs,
         Item::StaticAssert(_) | Item::Include(_) | Item::Macro(_) | Item::Verbatim(_) => {}
@@ -545,8 +570,22 @@ fn parse_item_using<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError> {
 
 fn parse_item_typedef<'de>(p: &mut Parser<'de>) -> Result<ItemTypedef<'de>, AstError> {
     p.expect(TokenKind::KeywordTypedef)?;
-    let ty = parse_type(p)?;
+    let mut ty = parse_type(p)?;
     let ident = parse_ident(p)?;
+    // Handle C-style array typedefs: `typedef char type24[3];`
+    while p.peek_kind() == Some(TokenKind::LeftBracket) {
+        p.bump()?;
+        let size = if p.peek_kind() != Some(TokenKind::RightBracket) {
+            Some(parse_expr(p)?)
+        } else {
+            None
+        };
+        p.expect(TokenKind::RightBracket)?;
+        ty = Type::Array(TypeArray {
+            element: Box::new(ty),
+            size,
+        });
+    }
     p.expect(TokenKind::Semicolon)?;
     Ok(ItemTypedef {
         attrs: Vec::new(),
@@ -800,9 +839,7 @@ fn parse_item_foreign_mod<'de>(p: &mut Parser<'de>) -> Result<ItemForeignMod<'de
         return Ok(ItemForeignMod {
             attrs: Vec::new(),
             abi,
-            items: vec![ForeignItem::Verbatim(ItemVerbatim {
-                tokens: Vec::new(), // simplified
-            })],
+            items: vec![ForeignItem::Verbatim(ItemVerbatim::default())],
         });
     }
 
@@ -813,7 +850,7 @@ fn parse_item_foreign_mod<'de>(p: &mut Parser<'de>) -> Result<ItemForeignMod<'de
         match inner_item {
             Item::Fn(f) => items.push(ForeignItem::Fn(f)),
             Item::Static(s) => items.push(ForeignItem::Static(s)),
-            _ => items.push(ForeignItem::Verbatim(ItemVerbatim { tokens: Vec::new() })),
+            _ => items.push(ForeignItem::Verbatim(ItemVerbatim::default())),
         }
     }
     p.expect(TokenKind::RightBrace)?;
@@ -1039,6 +1076,7 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
         return Ok(Item::Static(ItemStatic {
             attrs: Vec::new(),
             ty: fn_ptr_type,
+            class_path: None,
             ident: fp_ident,
             expr,
         }));
@@ -1047,6 +1085,11 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
     // Qualified destructor: ClassName::~ClassName()
     if p.peek_kind() == Some(TokenKind::DoubleColon) && p.peek_nth_kind(1) == Some(TokenKind::Compl)
     {
+        let class_path = if let Type::Path(tp) = &return_type {
+            Some(tp.path.clone())
+        } else {
+            None
+        };
         p.bump()?; // ::
         p.bump()?; // ~
         let dtor_ident = parse_ident(p)?;
@@ -1099,6 +1142,7 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
                     span: dtor_ident.span,
                     kind: FundamentalKind::Void,
                 }),
+                class_path,
                 ident: dtor_ident,
                 inputs,
                 variadic: false,
@@ -1109,6 +1153,8 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
                 pure_virtual: false,
                 defaulted: false,
                 deleted: false,
+                destructor_token: true,
+                member_init_list: Vec::new(),
             },
             block,
         }));
@@ -1129,11 +1175,15 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
                 && tp.path.segments.len() >= 2
             {
                 let fn_name = tp.path.segments.last().unwrap().ident;
-                // Reconstruct the return type from the qualifier minus the last segment
-                // For A::B::method, the return type doesn't come from the path
-                // This is actually: the function has no explicit return type (constructor/destructor pattern)
-                // or the first segments are the qualifier.
-                // For now, treat the whole thing as a function with the last segment as name
+                // Build class_path from all segments except the last
+                let class_path = {
+                    let mut segments = tp.path.segments.clone();
+                    segments.pop();
+                    Some(Path {
+                        leading_colon: tp.path.leading_colon,
+                        segments,
+                    })
+                };
                 let inputs = parse_fn_params(p)?;
                 // Trailing qualifiers
                 let mut const_token = false;
@@ -1159,14 +1209,33 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
                         _ => break,
                     }
                 }
-                // Member initializer list for constructors
-                if p.eat(TokenKind::Colon).is_some() {
-                    // Skip member init list
-                    while p.peek_kind() != Some(TokenKind::LeftBrace)
-                        && p.peek_kind() != Some(TokenKind::Semicolon)
-                        && !p.is_empty()
-                    {
-                        p.bump()?;
+                // Member initializer list for constructors only
+                let mut member_init_list = Vec::new();
+                let is_constructor = class_path.as_ref().is_some_and(|cp| {
+                    cp.segments
+                        .last()
+                        .is_some_and(|seg| seg.ident.sym == fn_name.sym)
+                });
+                if is_constructor && p.eat(TokenKind::Colon).is_some() {
+                    loop {
+                        skip_macro_annotations(p)?;
+                        let member = parse_path(p)?;
+                        p.expect(TokenKind::LeftParenthese)?;
+                        let mut args = Punctuated::new();
+                        while p.peek_kind() != Some(TokenKind::RightParenthese) && !p.is_empty() {
+                            let arg = parse_expr_no_comma(p)?;
+                            if let Some(comma) = p.eat(TokenKind::Comma) {
+                                args.push_pair(arg, comma);
+                            } else {
+                                args.push_value(arg);
+                                break;
+                            }
+                        }
+                        p.expect(TokenKind::RightParenthese)?;
+                        member_init_list.push(MemberInit { member, args });
+                        if p.eat(TokenKind::Comma).is_none() {
+                            break;
+                        }
                     }
                 }
                 // Trailing return type
@@ -1194,6 +1263,7 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
                             span: fn_name.span,
                             kind: FundamentalKind::Void,
                         }),
+                        class_path,
                         ident: fn_name,
                         inputs,
                         variadic: false,
@@ -1204,6 +1274,8 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
                         pure_virtual: false,
                         defaulted: false,
                         deleted: false,
+                        destructor_token: false,
+                        member_init_list,
                     },
                     block,
                 }));
@@ -1211,55 +1283,56 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
             return Err(p.error_at_current("expected identifier or function pointer"));
         }
         // Treat as macro invocation: consume everything until matching ) and ;
-        let _macro_ident = match &return_type {
+        let macro_ident = match &return_type {
             Type::Path(tp) => tp.path.segments[0].ident,
             _ => unreachable!(),
         };
-        p.bump()?; // (
+        let mut tokens = LinkedList::from([Token::new(macro_ident.span, TokenKind::Ident)]);
+        tokens.push_back(p.bump()?); // (
         let mut depth = 1u32;
         while depth > 0 && !p.is_empty() {
             match p.peek_kind() {
                 Some(TokenKind::LeftParenthese) => {
                     depth += 1;
-                    p.bump()?;
+                    tokens.push_back(p.bump()?);
                 }
                 Some(TokenKind::RightParenthese) => {
                     depth -= 1;
-                    p.bump()?;
+                    tokens.push_back(p.bump()?);
                 }
                 _ => {
-                    p.bump()?;
+                    tokens.push_back(p.bump()?);
                 }
             }
         }
         // Optional trailing block { ... } (e.g., MACRO_NAME(suite, name) { body })
         if p.peek_kind() == Some(TokenKind::LeftBrace) {
-            p.bump()?;
+            tokens.push_back(p.bump()?);
             let mut brace_depth = 1u32;
             while brace_depth > 0 && !p.is_empty() {
                 match p.peek_kind() {
                     Some(TokenKind::LeftBrace) => {
                         brace_depth += 1;
-                        p.bump()?;
+                        tokens.push_back(p.bump()?);
                     }
                     Some(TokenKind::RightBrace) => {
                         brace_depth -= 1;
-                        p.bump()?;
+                        tokens.push_back(p.bump()?);
                     }
                     _ => {
-                        p.bump()?;
+                        tokens.push_back(p.bump()?);
                     }
                 }
             }
-        } else {
-            p.eat(TokenKind::Semicolon); // optional trailing semicolon
+        } else if let Some(semi) = p.eat(TokenKind::Semicolon) {
+            tokens.push_back(semi);
         }
-        return Ok(Item::Verbatim(ItemVerbatim { tokens: Vec::new() }));
+        return Ok(Item::Verbatim(ItemVerbatim { tokens }));
     }
 
     // Parse name — could be a qualified path (e.g., Foo::bar, A::B::method)
     // or an operator overload (operator+), or a destructor (~Foo handled elsewhere)
-    let ident = if p.peek_kind() == Some(TokenKind::KeywordOperator) {
+    let (class_path, ident) = if p.peek_kind() == Some(TokenKind::KeywordOperator) {
         // operator overload: use span from 'operator' keyword through operator token
         let op_tok = p.bump()?;
         // Parse the operator symbol(s)
@@ -1291,10 +1364,13 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
         let start_r: core::ops::Range<usize> = op_tok.src_span().into();
         let end_r: core::ops::Range<usize> = end_span.into();
         let span = SourceSpan::new(p.src, start_r.start, end_r.end - start_r.start);
-        Ident {
-            sym: &p.src[start_r.start..end_r.end],
-            span,
-        }
+        (
+            None,
+            Ident {
+                sym: &p.src[start_r.start..end_r.end],
+                span,
+            },
+        )
     } else {
         // Regular ident, possibly qualified: Foo::bar
         let first = parse_ident(p)?;
@@ -1304,7 +1380,8 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
                 Some(TokenKind::Ident | TokenKind::Compl | TokenKind::KeywordOperator)
             )
         {
-            // Qualified name: consume all :: segments
+            // Qualified name: consume all :: segments, tracking qualifier
+            let mut qualifier_segments = vec![PathSegment { ident: first }];
             let mut last = first;
             while p.eat(TokenKind::DoubleColon).is_some() {
                 if p.peek_kind() == Some(TokenKind::Compl) {
@@ -1366,13 +1443,24 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
                     break;
                 } else if p.peek_kind() == Some(TokenKind::Ident) {
                     last = parse_ident(p)?;
+                    qualifier_segments.push(PathSegment { ident: last });
                 } else {
                     break;
                 }
             }
-            last
+            // The last segment in qualifier_segments is actually the function name, remove it
+            qualifier_segments.pop();
+            let class_path = if qualifier_segments.is_empty() {
+                None
+            } else {
+                Some(Path {
+                    leading_colon: false,
+                    segments: qualifier_segments,
+                })
+            };
+            (class_path, last)
         } else {
-            first
+            (None, first)
         }
     };
 
@@ -1442,13 +1530,33 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
             }
         }
 
-        // Member initializer list for constructors: : member(arg), ...
-        if p.eat(TokenKind::Colon).is_some() {
-            while p.peek_kind() != Some(TokenKind::LeftBrace)
-                && p.peek_kind() != Some(TokenKind::Semicolon)
-                && !p.is_empty()
-            {
-                p.bump()?;
+        // Member initializer list for constructors only: : member(arg), ...
+        let mut member_init_list = Vec::new();
+        let is_constructor = class_path.as_ref().is_some_and(|cp| {
+            cp.segments
+                .last()
+                .is_some_and(|seg| seg.ident.sym == ident.sym)
+        });
+        if is_constructor && p.eat(TokenKind::Colon).is_some() {
+            loop {
+                skip_macro_annotations(p)?;
+                let member = parse_path(p)?;
+                p.expect(TokenKind::LeftParenthese)?;
+                let mut args = Punctuated::new();
+                while p.peek_kind() != Some(TokenKind::RightParenthese) && !p.is_empty() {
+                    let arg = parse_expr_no_comma(p)?;
+                    if let Some(comma) = p.eat(TokenKind::Comma) {
+                        args.push_pair(arg, comma);
+                    } else {
+                        args.push_value(arg);
+                        break;
+                    }
+                }
+                p.expect(TokenKind::RightParenthese)?;
+                member_init_list.push(MemberInit { member, args });
+                if p.eat(TokenKind::Comma).is_none() {
+                    break;
+                }
             }
         }
 
@@ -1460,6 +1568,7 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
             static_token,
             explicit_token,
             return_type,
+            class_path,
             ident,
             inputs,
             variadic: false,
@@ -1470,6 +1579,8 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
             pure_virtual,
             defaulted,
             deleted,
+            destructor_token: false,
+            member_init_list,
         };
 
         // Skip macro annotations between signature and body (e.g., GTEST_LOCK_EXCLUDED_(mutex_))
@@ -1568,6 +1679,7 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
         Ok(Item::Static(ItemStatic {
             attrs: Vec::new(),
             ty: return_type,
+            class_path,
             ident,
             expr,
         }))
@@ -1576,6 +1688,7 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
             attrs: Vec::new(),
             constexpr_token,
             ty: return_type,
+            class_path,
             ident,
             expr: expr.unwrap_or(Expr::Lit(ExprLit {
                 span: ident.span,
@@ -1583,8 +1696,8 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
             })),
         }))
     } else {
-        // Regular variable — treat as static for now at file scope
-        Ok(Item::Static(ItemStatic {
+        // Regular variable declaration (not static, not const)
+        Ok(Item::Var(ItemVar {
             attrs: Vec::new(),
             ty: return_type,
             ident,
@@ -1594,7 +1707,13 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
 }
 
 fn is_const_type(ty: &Type) -> bool {
-    matches!(ty, Type::Qualified(q) if q.cv.const_token)
+    match ty {
+        Type::Qualified(q) => q.cv.const_token,
+        Type::Ptr(p) => is_const_type(&p.pointee),
+        Type::Reference(r) => is_const_type(&r.referent),
+        Type::Array(a) => is_const_type(&a.element),
+        _ => false,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1823,6 +1942,7 @@ fn parse_fields_named<'de>(
 ) -> Result<FieldsNamed<'de>, AstError> {
     p.expect(TokenKind::LeftBrace)?;
     let mut members = Vec::new();
+    let mut current_vis = Visibility::Inherited;
 
     while p.peek_kind() != Some(TokenKind::RightBrace) && !p.is_empty() {
         // Skip attributes inside class body
@@ -1935,7 +2055,8 @@ fn parse_fields_named<'de>(
 
                 if p.eat(TokenKind::Colon).is_some() {
                     loop {
-                        let member = parse_ident(p)?;
+                        skip_macro_annotations(p)?;
+                        let member = parse_path(p)?;
                         p.expect(TokenKind::LeftParenthese)?;
                         let mut args = Punctuated::new();
                         while p.peek_kind() != Some(TokenKind::RightParenthese) && !p.is_empty() {
@@ -1997,18 +2118,21 @@ fn parse_fields_named<'de>(
             Some(TokenKind::KeywordPublic) => {
                 p.bump()?;
                 p.expect(TokenKind::Colon)?;
+                current_vis = Visibility::Public;
                 members.push(Member::AccessSpecifier(Visibility::Public));
                 continue;
             }
             Some(TokenKind::KeywordProtected) => {
                 p.bump()?;
                 p.expect(TokenKind::Colon)?;
+                current_vis = Visibility::Protected;
                 members.push(Member::AccessSpecifier(Visibility::Protected));
                 continue;
             }
             Some(TokenKind::KeywordPrivate) => {
                 p.bump()?;
                 p.expect(TokenKind::Colon)?;
+                current_vis = Visibility::Private;
                 members.push(Member::AccessSpecifier(Visibility::Private));
                 continue;
             }
@@ -2047,7 +2171,8 @@ fn parse_fields_named<'de>(
             Item::Static(s) => {
                 members.push(Member::Field(Field {
                     attrs: Vec::new(),
-                    vis: Visibility::Inherited,
+                    vis: current_vis,
+                    static_token: true,
                     ty: s.ty,
                     ident: Some(s.ident),
                     default_value: s.expr,
@@ -2056,10 +2181,21 @@ fn parse_fields_named<'de>(
             Item::Const(c) => {
                 members.push(Member::Field(Field {
                     attrs: Vec::new(),
-                    vis: Visibility::Inherited,
+                    vis: current_vis,
+                    static_token: false,
                     ty: c.ty,
                     ident: Some(c.ident),
                     default_value: Some(c.expr),
+                }));
+            }
+            Item::Var(v) => {
+                members.push(Member::Field(Field {
+                    attrs: Vec::new(),
+                    vis: current_vis,
+                    static_token: false,
+                    ty: v.ty,
+                    ident: Some(v.ident),
+                    default_value: v.expr,
                 }));
             }
             other => members.push(Member::Item(Box::new(other))),
@@ -2174,20 +2310,51 @@ fn parse_stmt<'de>(p: &mut Parser<'de>) -> Result<Stmt<'de>, AstError> {
     if p.eat(TokenKind::KeywordFor).is_some() {
         p.expect(TokenKind::LeftParenthese)?;
 
-        // Try range-based for: type ident : expr
+        // Try range-based for: type ident : expr  OR  type [id, id] : expr
+        // Use parse_type_no_array to avoid consuming `[` as an array suffix,
+        // which would conflict with structured bindings like `[k, v]`.
         let cp = p.checkpoint();
         if is_type_start(p.peek_kind()) || p.peek_kind() == Some(TokenKind::Ident) {
-            if let Ok(ty) = parse_type(p)
-                && p.peek_kind() == Some(TokenKind::Ident)
-            {
-                let ident = parse_ident(p).unwrap();
-                if p.eat(TokenKind::Colon).is_some() {
+            if let Ok(ty) = parse_type_no_array(p) {
+                // Single identifier binding
+                let binding = if p.peek_kind() == Some(TokenKind::Ident) {
+                    let ident = parse_ident(p).unwrap();
+                    Some(ForRangeBinding::Ident(ident))
+                // Structured binding: [id1, id2, ...]
+                } else if p.peek_kind() == Some(TokenKind::LeftBracket) {
+                    p.eat(TokenKind::LeftBracket);
+                    let mut idents = Vec::new();
+                    loop {
+                        if p.peek_kind() == Some(TokenKind::RightBracket) {
+                            break;
+                        }
+                        if p.peek_kind() == Some(TokenKind::Ident) {
+                            idents.push(parse_ident(p).unwrap());
+                        } else {
+                            break;
+                        }
+                        if p.eat(TokenKind::Comma).is_none() {
+                            break;
+                        }
+                    }
+                    if p.eat(TokenKind::RightBracket).is_some() && !idents.is_empty() {
+                        Some(ForRangeBinding::Structured(idents))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                if let Some(binding) = binding
+                    && p.eat(TokenKind::Colon).is_some()
+                {
                     let range = parse_expr(p)?;
                     p.expect(TokenKind::RightParenthese)?;
                     let body = Box::new(parse_stmt(p)?);
                     return Ok(Stmt::ForRange(StmtForRange {
                         ty,
-                        ident,
+                        binding,
                         range,
                         body,
                     }));
@@ -2614,6 +2781,35 @@ fn parse_type<'de>(p: &mut Parser<'de>) -> Result<Type<'de>, AstError> {
     parse_type_suffix(p, qualified)
 }
 
+/// Like `parse_type` but stops before array brackets, so `[` is not consumed.
+/// Used in range-based for to avoid ambiguity with structured bindings.
+fn parse_type_no_array<'de>(p: &mut Parser<'de>) -> Result<Type<'de>, AstError> {
+    let mut cv = CvQualifiers::default();
+    while let Some(kind) = p.peek_kind() {
+        match kind {
+            TokenKind::KeywordConst => {
+                p.bump()?;
+                cv.const_token = true;
+            }
+            TokenKind::KeywordVolatile => {
+                p.bump()?;
+                cv.volatile_token = true;
+            }
+            _ => break,
+        }
+    }
+    let base = parse_base_type(p)?;
+    let qualified = if cv.const_token || cv.volatile_token {
+        Type::Qualified(TypeQualified {
+            cv,
+            ty: Box::new(base),
+        })
+    } else {
+        base
+    };
+    parse_type_ptr_ref_suffix(p, qualified)
+}
+
 fn parse_base_type<'de>(p: &mut Parser<'de>) -> Result<Type<'de>, AstError> {
     match p.peek_kind() {
         Some(TokenKind::KeywordVoid) => {
@@ -2786,10 +2982,13 @@ fn parse_angle_bracketed_args<'de>(
                 break;
             }
             Some(TokenKind::ShiftRight) => {
-                // >> could be closing two template levels
-                // We consume it as a single > and let the caller handle the other >
-                // For now, treat >> as closing this level
-                p.bump()?;
+                // >> closing two template levels — split into two logical `>`s.
+                // Consume the `>>` token, then push a synthetic `>` back so the
+                // outer template parser sees it.
+                let tok = p.bump()?;
+                let range: core::ops::Range<usize> = tok.src_span().into();
+                let right_span = SourceSpan::new(tok.src_span().full_source(), range.start + 1, 1);
+                p.pending_right_chevron = Some(Token::new(right_span, TokenKind::RightChevron));
                 break;
             }
             _ => return Err(p.error_at_current("expected `,` or `>` in template arguments")),
@@ -2872,7 +3071,11 @@ fn parse_integer_type<'de>(p: &mut Parser<'de>) -> Result<Type<'de>, AstError> {
     Ok(Type::Fundamental(TypeFundamental { span, kind }))
 }
 
-fn parse_type_suffix<'de>(p: &mut Parser<'de>, mut ty: Type<'de>) -> Result<Type<'de>, AstError> {
+/// Parse pointer and reference suffixes only (no array brackets).
+fn parse_type_ptr_ref_suffix<'de>(
+    p: &mut Parser<'de>,
+    mut ty: Type<'de>,
+) -> Result<Type<'de>, AstError> {
     loop {
         match p.peek_kind() {
             Some(TokenKind::Star) => {
@@ -2909,24 +3112,79 @@ fn parse_type_suffix<'de>(p: &mut Parser<'de>, mut ty: Type<'de>) -> Result<Type
                     referent: Box::new(ty),
                 });
             }
-            // Array type: T[N] or T[]
-            Some(TokenKind::LeftBracket) => {
-                p.bump()?;
-                let size = if p.peek_kind() != Some(TokenKind::RightBracket) {
-                    Some(parse_expr(p)?)
-                } else {
-                    None
-                };
-                p.expect(TokenKind::RightBracket)?;
-                ty = Type::Array(TypeArray {
-                    element: Box::new(ty),
-                    size,
-                });
-            }
             _ => break,
         }
     }
     Ok(ty)
+}
+
+fn parse_type_suffix<'de>(p: &mut Parser<'de>, ty: Type<'de>) -> Result<Type<'de>, AstError> {
+    let mut ty = parse_type_ptr_ref_suffix(p, ty)?;
+    while let Some(TokenKind::LeftBracket) = p.peek_kind() {
+        // Array type: T[N] or T[]
+        p.bump()?;
+        let size = if p.peek_kind() != Some(TokenKind::RightBracket) {
+            Some(parse_expr(p)?)
+        } else {
+            None
+        };
+        p.expect(TokenKind::RightBracket)?;
+        ty = Type::Array(TypeArray {
+            element: Box::new(ty),
+            size,
+        });
+    }
+
+    Ok(ty)
+}
+
+// ---------------------------------------------------------------------------
+// Macro annotation skipping
+// ---------------------------------------------------------------------------
+
+/// Skip macro-like annotations and preprocessor directives.
+/// Handles ALL_CAPS identifiers optionally followed by `(...)` and `#ifdef`/`#endif` etc.
+fn skip_macro_annotations<'de>(p: &mut Parser<'de>) -> Result<(), AstError> {
+    loop {
+        match p.peek_kind() {
+            Some(TokenKind::NumberSign) => {
+                parse_item_macro(p)?;
+            }
+            Some(TokenKind::Ident) => {
+                let src = p.peek().unwrap().src();
+                let is_macro_like = src.len() > 1
+                    && src.contains('_')
+                    && src
+                        .chars()
+                        .all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit());
+                if !is_macro_like {
+                    break;
+                }
+                p.bump()?;
+                if p.peek_kind() == Some(TokenKind::LeftParenthese) {
+                    p.bump()?;
+                    let mut depth = 1u32;
+                    while depth > 0 && !p.is_empty() {
+                        match p.peek_kind() {
+                            Some(TokenKind::LeftParenthese) => {
+                                depth += 1;
+                                p.bump()?;
+                            }
+                            Some(TokenKind::RightParenthese) => {
+                                depth -= 1;
+                                p.bump()?;
+                            }
+                            _ => {
+                                p.bump()?;
+                            }
+                        }
+                    }
+                }
+            }
+            _ => break,
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -3588,7 +3846,12 @@ fn parse_expr_primary<'de>(p: &mut Parser<'de>) -> Result<Expr<'de>, AstError> {
             let cp = p.checkpoint();
             p.bump()?;
             // Try C-style cast: (type)expr
-            if is_type_start(p.peek_kind()) {
+            if is_type_start(p.peek_kind())
+                || matches!(
+                    p.peek_kind(),
+                    Some(TokenKind::Ident | TokenKind::DoubleColon)
+                )
+            {
                 let _cp2 = p.checkpoint();
                 if let Ok(ty) = parse_type(p)
                     && p.eat(TokenKind::RightParenthese).is_some()
@@ -3674,7 +3937,7 @@ fn parse_expr_primary<'de>(p: &mut Parser<'de>) -> Result<Expr<'de>, AstError> {
             // Try template arguments: ident<types>(...)
             if p.peek_kind() == Some(TokenKind::LeftChevron) {
                 let cp = p.checkpoint();
-                if let Ok(_args) = parse_angle_bracketed_args(p) {
+                if let Ok(args) = parse_angle_bracketed_args(p) {
                     // If followed by ( or ;, it's a template instantiation
                     if matches!(
                         p.peek_kind(),
@@ -3691,9 +3954,10 @@ fn parse_expr_primary<'de>(p: &mut Parser<'de>) -> Result<Expr<'de>, AstError> {
                                 | TokenKind::LeftBracket
                         )
                     ) {
-                        // Return as a path expression; the template args are stored on the path
-                        // For simplicity, create a typed expression
-                        return Ok(Expr::Path(ExprPath { path }));
+                        return Ok(Expr::Path(ExprPath {
+                            path,
+                            args: Some(args.args),
+                        }));
                     }
                 }
                 p.restore(&cp);
@@ -3703,7 +3967,7 @@ fn parse_expr_primary<'de>(p: &mut Parser<'de>) -> Result<Expr<'de>, AstError> {
                     ident: path.segments[0].ident,
                 }))
             } else {
-                Ok(Expr::Path(ExprPath { path }))
+                Ok(Expr::Path(ExprPath { path, args: None }))
             }
         }
         Some(kind) => Err(AstError::UnexpectedToken {
@@ -4006,6 +4270,41 @@ mod tests {
         match &file.items[0] {
             Item::Typedef(td) => {
                 assert_eq!(td.ident.sym, "size_t");
+            }
+            other => panic!("expected Typedef, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_typedef_array() {
+        let file = parse("typedef char type24[3];");
+        match &file.items[0] {
+            Item::Typedef(td) => {
+                assert_eq!(td.ident.sym, "type24");
+                match &td.ty {
+                    Type::Array(arr) => {
+                        assert!(matches!(arr.element.as_ref(), Type::Fundamental(_)));
+                        assert!(arr.size.is_some());
+                    }
+                    other => panic!("expected Array type, got {other:?}"),
+                }
+            }
+            other => panic!("expected Typedef, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_typedef_array_2d() {
+        let file = parse("typedef int matrix[3][4];");
+        match &file.items[0] {
+            Item::Typedef(td) => {
+                assert_eq!(td.ident.sym, "matrix");
+                match &td.ty {
+                    Type::Array(outer) => {
+                        assert!(matches!(outer.element.as_ref(), Type::Array(_)));
+                    }
+                    other => panic!("expected Array type, got {other:?}"),
+                }
             }
             other => panic!("expected Typedef, got {other:?}"),
         }
@@ -4359,7 +4658,34 @@ mod tests {
         match &file.items[0] {
             Item::Fn(f) => {
                 let block = f.block.as_ref().unwrap();
-                assert!(matches!(&block.stmts[0], Stmt::ForRange(_)));
+                match &block.stmts[0] {
+                    Stmt::ForRange(fr) => {
+                        assert!(matches!(&fr.binding, ForRangeBinding::Ident(_)));
+                    }
+                    other => panic!("expected ForRange, got {other:?}"),
+                }
+            }
+            other => panic!("expected Fn, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_for_range_structured_binding() {
+        let file = parse("void f() { for (const auto& [k, v] : map) { } }");
+        match &file.items[0] {
+            Item::Fn(f) => {
+                let block = f.block.as_ref().unwrap();
+                match &block.stmts[0] {
+                    Stmt::ForRange(fr) => match &fr.binding {
+                        ForRangeBinding::Structured(idents) => {
+                            assert_eq!(idents.len(), 2);
+                            assert_eq!(idents[0].sym, "k");
+                            assert_eq!(idents[1].sym, "v");
+                        }
+                        other => panic!("expected Structured, got {other:?}"),
+                    },
+                    other => panic!("expected ForRange, got {other:?}"),
+                }
             }
             other => panic!("expected Fn, got {other:?}"),
         }
@@ -4550,13 +4876,12 @@ mod tests {
     #[test]
     fn parse_string_concat() {
         let file = parse("const char* s = \"hello\" \" \" \"world\";");
-        // const char* is a pointer to const char, parsed as Static (not Const)
         match &file.items[0] {
-            Item::Static(s) => match s.expr.as_ref().unwrap() {
+            Item::Const(c) => match &c.expr {
                 Expr::Lit(lit) => assert_eq!(lit.kind, LitKind::String),
                 other => panic!("expected Lit, got {other:?}"),
             },
-            other => panic!("expected Static, got {other:?}"),
+            other => panic!("expected Const, got {other:?}"),
         }
     }
 
@@ -4581,6 +4906,35 @@ mod tests {
             Item::Fn(f) => {
                 let param = f.sig.inputs.iter().next().unwrap();
                 assert!(matches!(&param.ty, Type::TemplateInst(_)));
+            }
+            other => panic!("expected Fn, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_expr_template_call() {
+        // std::shared_ptr<int>() should parse the template args
+        let file = parse("void f() { std::shared_ptr<int>(); }");
+        match &file.items[0] {
+            Item::Fn(f) => {
+                let stmt = &f.block.as_ref().unwrap().stmts[0];
+                if let Stmt::Expr(StmtExpr {
+                    expr: Expr::Call(call),
+                }) = stmt
+                {
+                    if let Expr::Path(ExprPath { path, args }) = &*call.func {
+                        assert_eq!(path.segments.len(), 2);
+                        assert_eq!(path.segments[0].ident.sym, "std");
+                        assert_eq!(path.segments[1].ident.sym, "shared_ptr");
+                        let args = args.as_ref().expect("template args should be present");
+                        assert_eq!(args.len(), 1);
+                        assert!(matches!(&args[0], TemplateArg::Type(_)));
+                    } else {
+                        panic!("expected ExprPath with template args, got {:#?}", call.func);
+                    }
+                } else {
+                    panic!("expected call expression, got {stmt:#?}");
+                }
             }
             other => panic!("expected Fn, got {other:?}"),
         }
@@ -4648,7 +5002,7 @@ mod tests {
                     match &f.members[0] {
                         Member::Constructor(ctor) => {
                             assert_eq!(ctor.member_init_list.len(), 1);
-                            assert_eq!(ctor.member_init_list[0].member.sym, "m_x");
+                            assert_eq!(ctor.member_init_list[0].member.to_string(), "m_x");
                         }
                         other => panic!("expected Constructor, got {other:?}"),
                     }
@@ -4696,7 +5050,35 @@ mod tests {
         match &file.items[0] {
             Item::Fn(f) => {
                 assert_eq!(f.sig.ident.sym, "bar");
+                assert!(!f.sig.is_class_constructor());
+                assert!(!f.sig.is_class_destructor());
                 assert!(f.block.is_some());
+            }
+            other => panic!("expected Fn, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_qualified_constructor() {
+        let file = parse("Foo::Foo() { }");
+        match &file.items[0] {
+            Item::Fn(f) => {
+                assert_eq!(f.sig.ident.sym, "Foo");
+                assert!(f.sig.is_class_constructor());
+                assert!(!f.sig.is_class_destructor());
+            }
+            other => panic!("expected Fn, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_qualified_destructor() {
+        let file = parse("Foo::~Foo() { }");
+        match &file.items[0] {
+            Item::Fn(f) => {
+                assert_eq!(f.sig.ident.sym, "Foo");
+                assert!(!f.sig.is_class_constructor());
+                assert!(f.sig.is_class_destructor());
             }
             other => panic!("expected Fn, got {other:?}"),
         }

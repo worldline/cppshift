@@ -1,15 +1,24 @@
 [package]
 name = "cppshift"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Jérémy HERGAULT", "Enzo PASQUALINI"]
 description = "CPP parser and transpiler"
 repository = "https://github.com/worldline/cppshift"
 edition = "2024"
 license = "Apache-2.0"
 
+[features]
+default = ["transpiler"]
+ast = []
+transpiler = ["ast", "dep:serde", "dep:syn", "dep:quote", "dep:proc-macro2"]
+
 [dependencies]
 miette = { version = "7", features = ["fancy"] }
 thiserror = "2"
+serde = { version = "1", features = ["derive"], optional = true }
+syn = { version = "2", features = ["full", "extra-traits", "printing"], optional = true }
+quote = { version = "1", optional = true }
+proc-macro2 = { version = "1", optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros"] }

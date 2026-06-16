@@ -4,7 +4,7 @@
 
 use std::slice;
 
-use crate::lex::Token;
+use crate::{SourceCodeSpan, SourceSpan, lex::Token};
 
 /// A sequence of syntax tree nodes of type `T` separated by punctuation tokens.
 ///
@@ -12,13 +12,18 @@ use crate::lex::Token;
 /// like function arguments: `a, b, c`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Punctuated<'de, T> {
-    inner: Vec<(T, Option<Token<'de>>)>,
+    pub(crate) inner: Vec<(T, Option<Token<'de>>)>,
 }
 
 impl<'de, T> Punctuated<'de, T> {
     /// Create a new empty punctuated sequence.
     pub fn new() -> Self {
         Punctuated { inner: Vec::new() }
+    }
+
+    /// Get the first value in the sequence, if it exists.
+    pub fn first(&self) -> Option<&T> {
+        self.inner.first().map(|(v, _)| v)
     }
 
     /// Push a value without trailing punctuation.
@@ -59,6 +64,24 @@ impl<'de, T> Punctuated<'de, T> {
     /// Convert into a Vec of just the values.
     pub fn into_values(self) -> Vec<T> {
         self.inner.into_iter().map(|(v, _)| v).collect()
+    }
+}
+
+impl<'de, T: SourceCodeSpan<'de>> SourceCodeSpan<'de> for Punctuated<'de, T> {
+    fn span(&self) -> Option<SourceSpan<'de>> {
+        let mut span: Option<SourceSpan<'de>> = None;
+        for punctuate in &self.inner {
+            let punctuate_span = punctuate.0.span().or(punctuate.1.map(|t| t.src_span()));
+            if let Some(span) = span {
+                if let Some(inner_span) = punctuate_span {
+                    span.extend(inner_span);
+                }
+            } else {
+                span = punctuate_span;
+            }
+        }
+
+        span
     }
 }
 
