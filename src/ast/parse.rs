@@ -24,6 +24,10 @@ pub(super) struct Parser<'de> {
     lexer: Lexer<'de>,
     /// The most recently consumed token (for span tracking)
     last_token: Option<Token<'de>>,
+    /// When we split a `>>` (ShiftRight) inside nested template args, the second
+    /// `>` is logically still pending. This holds the token so that peek/bump
+    /// can return it before advancing the underlying lexer.
+    pending_right_chevron: Option<Token<'de>>,
 }
 
 /// Advance a lexer clone, skipping comments, returning the next token.
@@ -43,10 +47,14 @@ impl<'de> Parser<'de> {
             src,
             lexer: Lexer::new(src),
             last_token: None,
+            pending_right_chevron: None,
         })
     }
 
     fn peek(&self) -> Option<Token<'de>> {
+        if let Some(tok) = self.pending_right_chevron {
+            return Some(tok);
+        }
         let mut clone = self.lexer.clone();
         next_non_comment(&mut clone)
     }
@@ -57,7 +65,16 @@ impl<'de> Parser<'de> {
 
     fn peek_nth(&self, n: usize) -> Option<Token<'de>> {
         let mut clone = self.lexer.clone();
-        for _ in 0..n {
+        let start = if self.pending_right_chevron.is_some() {
+            // The pending token counts as index 0
+            if n == 0 {
+                return self.pending_right_chevron;
+            }
+            1
+        } else {
+            0
+        };
+        for _ in start..n {
             next_non_comment(&mut clone)?;
         }
         next_non_comment(&mut clone)
@@ -68,6 +85,10 @@ impl<'de> Parser<'de> {
     }
 
     fn bump(&mut self) -> Result<Token<'de>, AstError> {
+        if let Some(tok) = self.pending_right_chevron.take() {
+            self.last_token = Some(tok);
+            return Ok(tok);
+        }
         loop {
             match self.lexer.next() {
                 Some(Ok(tok)) if tok.kind() == TokenKind::Comment => continue,
@@ -107,13 +128,14 @@ impl<'de> Parser<'de> {
     }
 
     /// Clone the lexer for backtracking.
-    fn checkpoint(&self) -> Lexer<'de> {
-        self.lexer.clone()
+    fn checkpoint(&self) -> (Lexer<'de>, Option<Token<'de>>) {
+        (self.lexer.clone(), self.pending_right_chevron)
     }
 
     /// Restore the lexer from a previously saved clone.
-    fn restore(&mut self, saved: &Lexer<'de>) {
-        self.lexer = saved.clone();
+    fn restore(&mut self, saved: &(Lexer<'de>, Option<Token<'de>>)) {
+        self.lexer = saved.0.clone();
+        self.pending_right_chevron = saved.1;
     }
 
     /// Compute a span from `start` (captured via `peek()` before parsing)
@@ -2960,10 +2982,13 @@ fn parse_angle_bracketed_args<'de>(
                 break;
             }
             Some(TokenKind::ShiftRight) => {
-                // >> could be closing two template levels
-                // We consume it as a single > and let the caller handle the other >
-                // For now, treat >> as closing this level
-                p.bump()?;
+                // >> closing two template levels — split into two logical `>`s.
+                // Consume the `>>` token, then push a synthetic `>` back so the
+                // outer template parser sees it.
+                let tok = p.bump()?;
+                let range: core::ops::Range<usize> = tok.src_span().into();
+                let right_span = SourceSpan::new(tok.src_span().full_source(), range.start + 1, 1);
+                p.pending_right_chevron = Some(Token::new(right_span, TokenKind::RightChevron));
                 break;
             }
             _ => return Err(p.error_at_current("expected `,` or `>` in template arguments")),

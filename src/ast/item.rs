@@ -899,8 +899,7 @@ pub enum IncludePath<'de> {
 impl<'de> From<IncludePath<'de>> for SourceSpan<'de> {
     fn from(include_path: IncludePath<'de>) -> Self {
         match include_path {
-            IncludePath::System(source_span) => source_span,
-            IncludePath::Local(source_span) => source_span,
+            IncludePath::System(source_span) | IncludePath::Local(source_span) => source_span,
         }
     }
 }
@@ -908,8 +907,7 @@ impl<'de> From<IncludePath<'de>> for SourceSpan<'de> {
 impl<'de> From<&IncludePath<'de>> for SourceSpan<'de> {
     fn from(include_path: &IncludePath<'de>) -> Self {
         match include_path {
-            IncludePath::System(source_span) => *source_span,
-            IncludePath::Local(source_span) => *source_span,
+            IncludePath::System(source_span) | IncludePath::Local(source_span) => *source_span,
         }
     }
 }
