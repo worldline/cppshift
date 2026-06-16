@@ -65,11 +65,11 @@ impl<'de> Parser<'de> {
 
     fn peek_nth(&self, n: usize) -> Option<Token<'de>> {
         let mut clone = self.lexer.clone();
+        if self.pending_right_chevron.is_some() && n == 0 {
+            return self.pending_right_chevron;
+        }
+
         let start = if self.pending_right_chevron.is_some() {
-            // The pending token counts as index 0
-            if n == 0 {
-                return self.pending_right_chevron;
-            }
             1
         } else {
             0
