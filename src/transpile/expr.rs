@@ -4,7 +4,7 @@ use quote::ToTokens;
 use crate::SourceCodeSpan as _;
 use crate::ast::expr::{
     BinaryOp, Expr, ExprBinary, ExprBool, ExprIndex, ExprMethodCall, ExprNullptr, ExprParen,
-    ExprUnary, UnaryOp,
+    ExprUnary, LitKind, UnaryOp,
 };
 use crate::transpile::{Transpile, TranspileContext, Transpiler};
 
@@ -90,7 +90,23 @@ impl<'de> Transpile for Expr<'de> {
     ) -> Result<(), TranspileError> {
         match self {
             Expr::Lit(lit) => {
-                let rust_expr: syn::Expr = syn::parse_str(lit.span.src()).map_err(|e| {
+                // C++ integer literals may carry width/sign suffixes (`LL`, `ULL`,
+                // `UL`, `L`, `U`) that are not valid Rust; strip them so the
+                // literal parses. Only applied to integer literals, so string and
+                // char literals (which may legitimately contain those letters) are
+                // untouched.
+                let src = lit.span.src();
+                let normalized = if lit.kind == LitKind::Integer {
+                    src.trim_end_matches(['l', 'L', 'u', 'U'])
+                } else {
+                    src
+                };
+                let normalized = if normalized.is_empty() {
+                    src
+                } else {
+                    normalized
+                };
+                let rust_expr: syn::Expr = syn::parse_str(normalized).map_err(|e| {
                     unsupported_from_expr(&format!("cannot parse literal: {e}"), self)
                 })?;
                 tokens.extend(quote::quote!(#rust_expr));

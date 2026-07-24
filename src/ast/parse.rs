@@ -638,6 +638,28 @@ fn parse_item_enum<'de>(p: &mut Parser<'de>) -> Result<ItemEnum<'de>, AstError> 
         }
         p.expect(TokenKind::RightBrace)?;
     }
+
+    // A trailing declarator may follow the enum body, e.g.
+    // `enum { A, B } mField;` declares an unnamed enum type and a member of
+    // that type in one statement. The declarator (and any initializer) is
+    // discarded — only the enum type is retained. Skip to the terminating `;`,
+    // balancing brackets from array declarators or brace/paren initializers.
+    if p.peek_kind() != Some(TokenKind::Semicolon) {
+        let mut depth = 0usize;
+        while let Some(kind) = p.peek_kind() {
+            match kind {
+                TokenKind::LeftBrace | TokenKind::LeftParenthese | TokenKind::LeftBracket => {
+                    depth += 1;
+                }
+                TokenKind::RightBrace | TokenKind::RightParenthese | TokenKind::RightBracket => {
+                    depth = depth.saturating_sub(1);
+                }
+                TokenKind::Semicolon if depth == 0 => break,
+                _ => {}
+            }
+            p.bump()?;
+        }
+    }
     p.expect(TokenKind::Semicolon)?;
 
     Ok(ItemEnum {
@@ -661,6 +683,9 @@ fn parse_item_struct<'de>(p: &mut Parser<'de>) -> Result<ItemStruct<'de>, AstErr
     } else {
         None
     };
+
+    // `struct Foo final : ...` — the `final` specifier follows the name.
+    p.eat(TokenKind::KeywordFinal);
 
     // Forward declaration: struct Foo;
     if p.eat(TokenKind::Semicolon).is_some() {
@@ -704,6 +729,9 @@ fn parse_item_class<'de>(p: &mut Parser<'de>) -> Result<ItemClass<'de>, AstError
     } else {
         None
     };
+
+    // `class Foo final : ...` — the `final` specifier follows the name.
+    p.eat(TokenKind::KeywordFinal);
 
     // Forward declaration: class Foo;
     if p.eat(TokenKind::Semicolon).is_some() {
@@ -2154,11 +2182,26 @@ fn parse_fields_named<'de>(
             }
             Some(TokenKind::KeywordFriend) => {
                 p.bump()?;
-                let inner = parse_item(p)?;
-                members.push(Member::Friend(ItemFriend {
-                    attrs: Vec::new(),
-                    item: Box::new(inner),
-                }));
+                // Friend declarations are not emitted, and can carry constructs
+                // the item parser doesn't handle (e.g. a templated befriended
+                // class `friend class cFoo<A, B>;`). Skip to the terminating
+                // `;`, balancing any `{}`/`()` from an inline friend definition.
+                let mut brace_depth = 0usize;
+                let mut paren_depth = 0usize;
+                while let Some(kind) = p.peek_kind() {
+                    match kind {
+                        TokenKind::LeftBrace => brace_depth += 1,
+                        TokenKind::RightBrace => brace_depth = brace_depth.saturating_sub(1),
+                        TokenKind::LeftParenthese => paren_depth += 1,
+                        TokenKind::RightParenthese => paren_depth = paren_depth.saturating_sub(1),
+                        TokenKind::Semicolon if brace_depth == 0 && paren_depth == 0 => {
+                            p.bump()?;
+                            break;
+                        }
+                        _ => {}
+                    }
+                    p.bump()?;
+                }
                 continue;
             }
             _ => {}
@@ -3337,6 +3380,18 @@ fn parse_expr_precedence<'de>(
             Some(TokenKind::Dot) => {
                 p.bump()?;
                 let member = parse_ident(p)?;
+                // Explicit template arguments on a method call, e.g.
+                // `obj.method<T>(...)`. The turbofish is discarded (method calls
+                // don't retain template args); only recognized when it parses as
+                // angle-bracketed args and is immediately followed by `(`, so a
+                // genuine comparison like `a.b < c` is left untouched.
+                if p.peek_kind() == Some(TokenKind::LeftChevron) {
+                    let cp = p.checkpoint();
+                    match parse_angle_bracketed_args(p) {
+                        Ok(_) if p.peek_kind() == Some(TokenKind::LeftParenthese) => {}
+                        _ => p.restore(&cp),
+                    }
+                }
                 if p.peek_kind() == Some(TokenKind::LeftParenthese) {
                     p.bump()?;
                     let mut args = Punctuated::new();
@@ -3368,6 +3423,18 @@ fn parse_expr_precedence<'de>(
             Some(TokenKind::PointerMember) => {
                 p.bump()?;
                 let member = parse_ident(p)?;
+                // Explicit template arguments on a method call, e.g.
+                // `ptr->method<T>(...)`. The turbofish is discarded (method calls
+                // don't retain template args); only recognized when it parses as
+                // angle-bracketed args and is immediately followed by `(`, so a
+                // genuine comparison like `a->b < c` is left untouched.
+                if p.peek_kind() == Some(TokenKind::LeftChevron) {
+                    let cp = p.checkpoint();
+                    match parse_angle_bracketed_args(p) {
+                        Ok(_) if p.peek_kind() == Some(TokenKind::LeftParenthese) => {}
+                        _ => p.restore(&cp),
+                    }
+                }
                 if p.peek_kind() == Some(TokenKind::LeftParenthese) {
                     p.bump()?;
                     let mut args = Punctuated::new();
@@ -4333,6 +4400,40 @@ mod tests {
                 assert_eq!(e.variants.len(), 3);
             }
             other => panic!("expected Enum, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_enum_with_trailing_declarator() {
+        // Anonymous enum declaring a member in one statement (C++ allows this).
+        let file = parse("enum { FC_NONE, FC_ALL } mFuncCallHistoryType;");
+        match &file.items[0] {
+            Item::Enum(e) => {
+                assert!(e.ident.is_none());
+                assert_eq!(e.variants.len(), 2);
+            }
+            other => panic!("expected Enum, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_method_call_with_template_args() {
+        // Explicit template arguments on a method call (turbofish); the args are
+        // discarded but the call must parse as a method call.
+        let file = parse("void f() { pTxn->searchDecoW<cTDPci>(); }");
+        match &file.items[0] {
+            Item::Fn(_) => {}
+            other => panic!("expected Fn, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_arrow_comparison_still_works() {
+        // A genuine comparison after `->` must not be mistaken for a turbofish.
+        let file = parse("void f() { bool b = a->x < c; }");
+        match &file.items[0] {
+            Item::Fn(_) => {}
+            other => panic!("expected Fn, got {other:?}"),
         }
     }
 

@@ -379,7 +379,7 @@ mod tests {
                 } else {
                     panic!(
                         "expected field member[0], got {:?}",
-                        &named_fields.members[0]
+                        named_fields.members[0]
                     );
                 }
 
@@ -394,7 +394,7 @@ mod tests {
                 } else {
                     panic!(
                         "expected field member[3], got {:?}",
-                        &named_fields.members[3]
+                        named_fields.members[3]
                     );
                 }
 
@@ -409,7 +409,7 @@ mod tests {
                 } else {
                     panic!(
                         "expected field member[5], got {:?}",
-                        &named_fields.members[5]
+                        named_fields.members[5]
                     );
                 }
             }
