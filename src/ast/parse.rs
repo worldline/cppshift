@@ -1576,8 +1576,7 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
             loop {
                 skip_macro_annotations(p)?;
                 let member = parse_path(p)?;
-                // A base-class initializer may be a template-id, e.g.
-                // `std::vector<string>(items)`.
+                // A base-class initializer may be a template-id
                 if p.peek_kind() == Some(TokenKind::LeftChevron) {
                     let cp = p.checkpoint();
                     if parse_angle_bracketed_args(p).is_err() {
@@ -2100,8 +2099,7 @@ fn parse_fields_named<'de>(
                     loop {
                         skip_macro_annotations(p)?;
                         let member = parse_path(p)?;
-                        // A base-class initializer may be a template-id, e.g.
-                        // `std::vector<string>(items)`.
+                        // A base-class initializer may be a template-id
                         if p.peek_kind() == Some(TokenKind::LeftChevron) {
                             let cp = p.checkpoint();
                             if parse_angle_bracketed_args(p).is_err() {
@@ -5138,7 +5136,7 @@ mod tests {
 
     #[test]
     fn parse_constructor_init_list_template_base() {
-        // A base-class initializer may be a template-id: `std::vector<string>(items)`.
+        // A base-class initializer may be a template-id: `std::vector<int>(x)`.
         let file =
             parse("class Foo : public std::vector<int> { Foo(int x) : std::vector<int>(x) { } };");
         match &file.items[0] {
