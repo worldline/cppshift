@@ -1248,6 +1248,13 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
                     loop {
                         skip_macro_annotations(p)?;
                         let member = parse_path(p)?;
+                        // A base-class initializer may be a template-id
+                        if p.peek_kind() == Some(TokenKind::LeftChevron) {
+                            let cp = p.checkpoint();
+                            if parse_angle_bracketed_args(p).is_err() {
+                                p.restore(&cp);
+                            }
+                        }
                         p.expect(TokenKind::LeftParenthese)?;
                         let mut args = Punctuated::new();
                         while p.peek_kind() != Some(TokenKind::RightParenthese) && !p.is_empty() {
@@ -1569,6 +1576,14 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
             loop {
                 skip_macro_annotations(p)?;
                 let member = parse_path(p)?;
+                // A base-class initializer may be a template-id, e.g.
+                // `std::vector<string>(items)`.
+                if p.peek_kind() == Some(TokenKind::LeftChevron) {
+                    let cp = p.checkpoint();
+                    if parse_angle_bracketed_args(p).is_err() {
+                        p.restore(&cp);
+                    }
+                }
                 p.expect(TokenKind::LeftParenthese)?;
                 let mut args = Punctuated::new();
                 while p.peek_kind() != Some(TokenKind::RightParenthese) && !p.is_empty() {
@@ -2085,6 +2100,14 @@ fn parse_fields_named<'de>(
                     loop {
                         skip_macro_annotations(p)?;
                         let member = parse_path(p)?;
+                        // A base-class initializer may be a template-id, e.g.
+                        // `std::vector<string>(items)`.
+                        if p.peek_kind() == Some(TokenKind::LeftChevron) {
+                            let cp = p.checkpoint();
+                            if parse_angle_bracketed_args(p).is_err() {
+                                p.restore(&cp);
+                            }
+                        }
                         p.expect(TokenKind::LeftParenthese)?;
                         let mut args = Punctuated::new();
                         while p.peek_kind() != Some(TokenKind::RightParenthese) && !p.is_empty() {
@@ -5110,6 +5133,40 @@ mod tests {
                 }
             }
             other => panic!("expected Class, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_constructor_init_list_template_base() {
+        // A base-class initializer may be a template-id: `std::vector<string>(items)`.
+        let file =
+            parse("class Foo : public std::vector<int> { Foo(int x) : std::vector<int>(x) { } };");
+        match &file.items[0] {
+            Item::Class(c) => {
+                if let Fields::Named(f) = &c.fields {
+                    match &f.members[0] {
+                        Member::Constructor(ctor) => {
+                            assert_eq!(ctor.member_init_list.len(), 1);
+                            assert_eq!(ctor.member_init_list[0].member.to_string(), "std::vector");
+                        }
+                        other => panic!("expected Constructor, got {other:?}"),
+                    }
+                }
+            }
+            other => panic!("expected Class, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_qualified_constructor_init_list_template_base() {
+        let file = parse("Foo::Foo(int x) : std::vector<int>(x), m_x(x) { }");
+        match &file.items[0] {
+            Item::Fn(f) => {
+                assert_eq!(f.sig.member_init_list.len(), 2);
+                assert_eq!(f.sig.member_init_list[0].member.to_string(), "std::vector");
+                assert_eq!(f.sig.member_init_list[1].member.to_string(), "m_x");
+            }
+            other => panic!("expected Fn, got {other:?}"),
         }
     }
 
