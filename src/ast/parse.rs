@@ -3372,6 +3372,20 @@ fn parse_expr_precedence<'de>(
                 });
                 continue;
             }
+            // Braced functional cast: `T{}`, `ns::T{a, b}`, `std::vector<int>{1, 2}`.
+            // Only after a (qualified/templated) name. Braces that don't hold an
+            // expression list (e.g. `MACRO { stmts }`) are left to the caller.
+            Some(TokenKind::LeftBrace) if matches!(lhs, Expr::Ident(_) | Expr::Path(_)) => {
+                let cp = p.checkpoint();
+                if let Ok(args) = parse_braced_args(p) {
+                    lhs = Expr::Call(ExprCall {
+                        func: Box::new(lhs),
+                        args,
+                    });
+                    continue;
+                }
+                p.restore(&cp);
+            }
             Some(TokenKind::LeftBracket) => {
                 p.bump()?;
                 let index = parse_expr(p)?;
@@ -3543,6 +3557,23 @@ fn parse_expr_precedence<'de>(
     }
 
     Ok(lhs)
+}
+
+/// Parse `{ expr, expr, ... }` into call-style arguments (trailing comma allowed).
+fn parse_braced_args<'de>(p: &mut Parser<'de>) -> Result<Punctuated<'de, Expr<'de>>, AstError> {
+    p.expect(TokenKind::LeftBrace)?;
+    let mut args = Punctuated::new();
+    while p.peek_kind() != Some(TokenKind::RightBrace) && !p.is_empty() {
+        let arg = parse_expr_no_comma(p)?;
+        if let Some(comma) = p.eat(TokenKind::Comma) {
+            args.push_pair(arg, comma);
+        } else {
+            args.push_value(arg);
+            break;
+        }
+    }
+    p.expect(TokenKind::RightBrace)?;
+    Ok(args)
 }
 
 fn parse_expr_prefix<'de>(p: &mut Parser<'de>) -> Result<Expr<'de>, AstError> {
@@ -5060,6 +5091,51 @@ mod tests {
             }
             other => panic!("expected Fn, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parse_expr_braced_functional_cast() {
+        // `strm << T{} << ns::U{1, 2};` must keep the whole shift chain
+        let file = parse("void f() { strm << T{} << ns::U{1, 2}; }");
+        let Item::Fn(f) = &file.items[0] else {
+            panic!("expected Fn, got {:?}", file.items[0]);
+        };
+        let stmts = &f.block.as_ref().unwrap().stmts;
+        assert_eq!(stmts.len(), 1);
+        let Stmt::Expr(StmtExpr {
+            expr: Expr::Binary(outer),
+        }) = &stmts[0]
+        else {
+            panic!("expected binary expression, got {:#?}", stmts[0]);
+        };
+        let Expr::Call(u_call) = &*outer.rhs else {
+            panic!("expected call, got {:#?}", outer.rhs);
+        };
+        assert!(
+            matches!(&*u_call.func, Expr::Path(ExprPath { path, .. }) if path.segments.len() == 2)
+        );
+        assert_eq!(u_call.args.len(), 2);
+        let Expr::Binary(inner) = &*outer.lhs else {
+            panic!("expected binary expression, got {:#?}", outer.lhs);
+        };
+        let Expr::Call(t_call) = &*inner.rhs else {
+            panic!("expected call, got {:#?}", inner.rhs);
+        };
+        assert!(matches!(&*t_call.func, Expr::Ident(ExprIdent { ident }) if ident.sym == "T"));
+        assert!(t_call.args.is_empty());
+    }
+
+    #[test]
+    fn parse_macro_with_block_still_skipped() {
+        // A name followed by a statement block is not a braced cast
+        let file = parse("void f() { MACRO { g(x); } return; }");
+        let Item::Fn(f) = &file.items[0] else {
+            panic!("expected Fn, got {:?}", file.items[0]);
+        };
+        let stmts = &f.block.as_ref().unwrap().stmts;
+        assert_eq!(stmts.len(), 2);
+        assert!(matches!(stmts[0], Stmt::Empty));
+        assert!(matches!(stmts[1], Stmt::Return(_)));
     }
 
     // -- Étape 5 tests: item features --
