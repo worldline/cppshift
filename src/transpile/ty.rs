@@ -376,6 +376,57 @@ fn try_transpile_char_array_from_str_lit<'de>(
     Some(Ok(()))
 }
 
+/// Returns `true` if `func` names the class type `ty` (CV-qualifiers and template
+/// arguments ignored), i.e. `func(args)` is a constructor call of `ty`.
+fn expr_names_type(func: &Expr<'_>, ty: &Type<'_>) -> bool {
+    let ty_path = match ty {
+        Type::Qualified(q) => return expr_names_type(func, &q.ty),
+        Type::Path(tp) => &tp.path,
+        Type::TemplateInst(t) => &t.path,
+        _ => return false,
+    };
+    match func {
+        Expr::Ident(i) => {
+            !ty_path.leading_colon
+                && ty_path.segments.len() == 1
+                && ty_path.segments[0].ident.sym == i.ident.sym
+        }
+        Expr::Path(p) => {
+            p.path.leading_colon == ty_path.leading_colon
+                && p.path.segments.len() == ty_path.segments.len()
+                && p.path
+                    .segments
+                    .iter()
+                    .zip(&ty_path.segments)
+                    .all(|(a, b)| a.ident.sym == b.ident.sym)
+        }
+        _ => false,
+    }
+}
+
+/// Transpile the initializer of a const/static of type `ty`.
+///
+/// A constructor call of `ty` (`T x(0, 0);`, `T x = T(0, 0);`) becomes `<T>::new(0, 0)`.
+fn transpile_initializer<'de>(
+    ty: &Type<'de>,
+    expr: &Expr<'de>,
+    transpiler: &Transpiler,
+    ctx: &mut TranspileContext,
+) -> Result<TokenStream, TranspileError> {
+    if let Expr::Call(call) = expr
+        && expr_names_type(&call.func, ty)
+    {
+        let rust_ty = transpiler.ty_mapper.map_type(ty)?;
+        let args = call
+            .args
+            .iter()
+            .map(|arg| arg.transpile_token_stream(transpiler, ctx))
+            .collect::<Result<Vec<_>, _>>()?;
+        return Ok(quote::quote!(<#rust_ty>::new(#(#args),*)));
+    }
+    expr.transpile_token_stream(transpiler, ctx)
+}
+
 impl<'de> Transpile for ItemConst<'de> {
     fn transpile(
         &self,
@@ -401,8 +452,7 @@ impl<'de> Transpile for ItemConst<'de> {
             return result;
         }
 
-        let mut expr_tokens = TokenStream::new();
-        self.expr.transpile(transpiler, ctx, &mut expr_tokens)?;
+        let expr_tokens = transpile_initializer(&self.ty, &self.expr, transpiler, ctx)?;
 
         match &self.expr {
             // C++ string constants with string literal init → `&str`
@@ -475,8 +525,7 @@ impl<'de> Transpile for ItemStatic<'de> {
             return result;
         }
 
-        let mut expr_tokens = TokenStream::new();
-        expr.transpile(transpiler, ctx, &mut expr_tokens)?;
+        let expr_tokens = transpile_initializer(&self.ty, expr, transpiler, ctx)?;
 
         match expr {
             // C++ string statics with string literal init → `&str`
@@ -984,6 +1033,45 @@ mod tests {
             }
             item => panic!("expected ItemConst, got {item:?}"),
         }
+        Ok(())
+    }
+
+    #[test]
+    fn const_paren_initializer_transpiles() -> Result<(), TranspileError> {
+        let transpiler = Transpiler {
+            ty_mapper: TypeMapper::builder()
+                .map_path("cShortDate", "ShortDate")?
+                .build(),
+            ..Default::default()
+        };
+        let src = "const tCardDate gcInvalidCardDate(0, 0);\n\
+                   const cShortDate gcDate(1, -2);\n\
+                   const string isoMTIdx(\"MTYP\");\n\
+                   static tCardDate gsDate(0, 0);\n\
+                   const cTime getInvalidTime();";
+        let file = parse_file(src).unwrap();
+        let expected = [
+            "# [doc = concat ! (\" Auto-transpiled const \" , stringify ! (tCardDate))] pub const gcInvalidCardDate : tCardDate = < tCardDate > :: new (0 , 0) ;",
+            "# [doc = concat ! (\" Auto-transpiled const \" , stringify ! (ShortDate))] pub const gcDate : ShortDate = < ShortDate > :: new (1 , - 2) ;",
+            "# [doc = \" Auto-transpiled &str const\"] pub const isoMTIdx : & str = \"MTYP\" ;",
+            "# [doc = concat ! (\" Auto-transpiled static \" , stringify ! (tCardDate))] pub static gsDate : tCardDate = < tCardDate > :: new (0 , 0) ;",
+        ];
+        for (item, expected) in file.items.iter().zip(expected) {
+            let tokens = match item {
+                crate::ast::Item::Const(c) => {
+                    c.transpile_token_stream(&transpiler, &mut TranspileContext::default())?
+                }
+                crate::ast::Item::Static(s) => {
+                    s.transpile_token_stream(&transpiler, &mut TranspileContext::default())?
+                }
+                item => panic!("expected ItemConst or ItemStatic, got {item:?}"),
+            };
+            assert_eq!(tokens.to_string(), expected);
+        }
+        assert!(matches!(
+            &file.items[4],
+            crate::ast::Item::Fn(f) if f.block.is_none()
+        ));
         Ok(())
     }
 

@@ -1499,8 +1499,8 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
         }
     };
 
-    // Function: ident followed by (
-    if p.peek_kind() == Some(TokenKind::LeftParenthese) {
+    // Function: ident followed by ( — unless it is a direct-initializer `T x(0, 0);`
+    if p.peek_kind() == Some(TokenKind::LeftParenthese) && !is_paren_initializer(p) {
         let inputs = parse_fn_params(p)?;
 
         // Trailing qualifiers
@@ -1695,6 +1695,10 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
         };
         p.expect(TokenKind::RightBrace)?;
         init
+    } else if p.peek_kind() == Some(TokenKind::LeftParenthese) {
+        // Direct initialization: type ident(args);
+        let args = parse_paren_args(p)?;
+        Some(paren_init_expr(p, &return_type, args)?)
     } else {
         None
     };
@@ -1713,6 +1717,8 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
         }
         if p.eat(TokenKind::Equal).is_some() {
             let _init = parse_expr_no_comma(p)?;
+        } else if p.peek_kind() == Some(TokenKind::LeftParenthese) {
+            let _init = parse_paren_args(p)?;
         }
     }
     p.expect(TokenKind::Semicolon)?;
@@ -1745,6 +1751,71 @@ fn parse_item_fn_or_var<'de>(p: &mut Parser<'de>) -> Result<Item<'de>, AstError>
             ident,
             expr,
         }))
+    }
+}
+
+/// At `(` after a declarator name: `true` when the list starts with a token that
+/// cannot begin a parameter declaration (a literal or a signed number), so
+/// `T x(0, 0);` is a variable while `T f();` / `T f(U);` stay functions.
+fn is_paren_initializer(p: &Parser<'_>) -> bool {
+    match p.peek_nth_kind(1) {
+        Some(
+            TokenKind::Number
+            | TokenKind::String
+            | TokenKind::Char
+            | TokenKind::KeywordTrue
+            | TokenKind::KeywordFalse
+            | TokenKind::KeywordNullptr,
+        ) => true,
+        Some(TokenKind::Minus | TokenKind::Plus) => p.peek_nth_kind(2) == Some(TokenKind::Number),
+        _ => false,
+    }
+}
+
+/// Initializer of `ty ident(args);`. A single argument is the initializer itself,
+/// as in `ty ident = arg;`. Several arguments become a constructor call of `ty`:
+/// `T x(0, 0)` → `Expr::Call { func: T, args: (0, 0) }`.
+fn paren_init_expr<'de>(
+    p: &Parser<'de>,
+    ty: &Type<'de>,
+    args: Punctuated<'de, Expr<'de>>,
+) -> Result<Expr<'de>, AstError> {
+    if args.len() == 1 {
+        return Ok(args.into_values().remove(0));
+    }
+    let func = match ty_constructor_expr(ty) {
+        Some(func) => func,
+        None => {
+            return Err(p.error_at_current(
+                "parenthesized initializer with several arguments requires a class type",
+            ));
+        }
+    };
+    Ok(Expr::Call(ExprCall {
+        func: Box::new(func),
+        args,
+    }))
+}
+
+/// Expression naming the class type `ty` (CV-qualifiers stripped), shaped as the
+/// expression parser builds the callee of `T(args)`.
+fn ty_constructor_expr<'de>(ty: &Type<'de>) -> Option<Expr<'de>> {
+    match ty {
+        Type::Qualified(q) => ty_constructor_expr(&q.ty),
+        Type::Path(tp) if tp.path.segments.len() == 1 && !tp.path.leading_colon => {
+            Some(Expr::Ident(ExprIdent {
+                ident: tp.path.segments[0].ident,
+            }))
+        }
+        Type::Path(tp) => Some(Expr::Path(ExprPath {
+            path: tp.path.clone(),
+            args: None,
+        })),
+        Type::TemplateInst(t) => Some(Expr::Path(ExprPath {
+            path: t.path.clone(),
+            args: Some(t.args.clone()),
+        })),
+        _ => None,
     }
 }
 
@@ -3576,6 +3647,22 @@ fn parse_braced_args<'de>(p: &mut Parser<'de>) -> Result<Punctuated<'de, Expr<'d
     Ok(args)
 }
 
+fn parse_paren_args<'de>(p: &mut Parser<'de>) -> Result<Punctuated<'de, Expr<'de>>, AstError> {
+    p.expect(TokenKind::LeftParenthese)?;
+    let mut args = Punctuated::new();
+    while p.peek_kind() != Some(TokenKind::RightParenthese) && !p.is_empty() {
+        let arg = parse_expr_no_comma(p)?;
+        if let Some(comma) = p.eat(TokenKind::Comma) {
+            args.push_pair(arg, comma);
+        } else {
+            args.push_value(arg);
+            break;
+        }
+    }
+    p.expect(TokenKind::RightParenthese)?;
+    Ok(args)
+}
+
 fn parse_expr_prefix<'de>(p: &mut Parser<'de>) -> Result<Expr<'de>, AstError> {
     match p.peek_kind() {
         Some(TokenKind::Minus) => {
@@ -4603,6 +4690,63 @@ mod tests {
                 assert_eq!(c.ident.sym, "MAX");
             }
             other => panic!("expected Const, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_const_paren_initializer() {
+        let file = parse(
+            "const tCardDate gcInvalidCardDate(0, -1);\n\
+             const string isoMTIdx(\"MTYP\");\n\
+             static ns::Point origin(0, 0);\n\
+             const cTime getInvalidTime();\n\
+             const cDate toDate(cTime);",
+        );
+        match &file.items[0] {
+            Item::Const(c) => {
+                assert_eq!(c.ident.sym, "gcInvalidCardDate");
+                let Expr::Call(call) = &c.expr else {
+                    panic!("expected Call, got {:?}", c.expr);
+                };
+                assert!(matches!(&*call.func, Expr::Ident(i) if i.ident.sym == "tCardDate"));
+                assert_eq!(call.args.len(), 2);
+                assert!(matches!(
+                    call.args.iter().nth(1),
+                    Some(Expr::Unary(ExprUnary {
+                        op: UnaryOp::Negate,
+                        ..
+                    }))
+                ));
+            }
+            other => panic!("expected Const, got {other:?}"),
+        }
+        match &file.items[1] {
+            Item::Const(c) => {
+                assert_eq!(c.ident.sym, "isoMTIdx");
+                assert!(matches!(
+                    c.expr,
+                    Expr::Lit(ExprLit {
+                        kind: LitKind::String,
+                        ..
+                    })
+                ));
+            }
+            other => panic!("expected Const, got {other:?}"),
+        }
+        match &file.items[2] {
+            Item::Static(s) => {
+                let Some(Expr::Call(call)) = &s.expr else {
+                    panic!("expected Call, got {:?}", s.expr);
+                };
+                assert!(matches!(&*call.func, Expr::Path(p) if p.path.segments.len() == 2));
+            }
+            other => panic!("expected Static, got {other:?}"),
+        }
+        for item in &file.items[3..] {
+            match item {
+                Item::Fn(f) => assert!(f.block.is_none()),
+                other => panic!("expected Fn, got {other:?}"),
+            }
         }
     }
 

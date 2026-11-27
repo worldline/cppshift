@@ -1,6 +1,6 @@
 [package]
 name = "cppshift"
-version = "0.1.4"
+version = "0.1.5"
 authors = ["Jérémy HERGAULT", "Enzo PASQUALINI"]
 description = "CPP parser and transpiler"
 repository = "https://github.com/worldline/cppshift"
